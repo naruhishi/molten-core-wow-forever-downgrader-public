@@ -1,0 +1,16 @@
+{
+  "product": "wowf",
+  "region": "us",
+  "version": "1.60.1.71037",
+  "build_id": 71037,
+  "build_config": "0acab1e6aa41b46165d2ca66853b417b",
+  "cdn_config": "bc770ae1ebe031a20b2866af12988469",
+  "cdn_path": "tpr/wow",
+  "cdn_hosts": [
+    "level3.blizzard.com",
+    "us.cdn.blizzard.com"
+  ],
+  "game_folder": "_forever_",
+  "flavor": "wowf",
+  "note": "WoW Forever 71037, regional manifest indexed 2026-11-25."
+}
