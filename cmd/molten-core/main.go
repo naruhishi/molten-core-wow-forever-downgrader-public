@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/buildthehomelab/wow-everlake-launcher/internal/cdn"
@@ -16,7 +17,7 @@ import (
 	"github.com/buildthehomelab/wow-everlake-launcher/internal/pin"
 )
 
-var appVersion = "v1.7.1"
+var appVersion = "v1.8.1"
 
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--app-version" {
@@ -166,7 +167,7 @@ func run(ctx context.Context, input *bufio.Reader, args []string, logf func(stri
 	report, err := install.Run(ctx, install.Options{
 		Dir: destination, ReuseFrom: source, Pin: target,
 		CDN: cdn.New(append([]string{manifestHost}, hosts...), target.CDNPath), GameHosts: hosts,
-		Tags: []string{"Windows", "x86_64", "enUS", "US"},
+		Tags: clientTags(),
 		Log:  logf,
 	})
 	if err != nil {
@@ -186,4 +187,15 @@ func validate(ctx context.Context, version string, logf func(string, ...any)) (p
 		logf("%s: manifiestos disponibles / manifests available", target.Version)
 	}
 	return target, err
+}
+
+func clientTags() []string {
+	platform, arch := "Windows", "x86_64"
+	if runtime.GOOS == "darwin" {
+		platform = "OSX"
+		if runtime.GOARCH == "arm64" {
+			arch = "arm64"
+		}
+	}
+	return []string{platform, arch, "enUS", "US"}
 }
