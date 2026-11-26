@@ -27,6 +27,14 @@ type Options struct {
 	DataDir string
 	// Stop closes the window when it's closed (or receives a value).
 	Stop <-chan struct{}
+	// FolderRequests asks the Linux window to open a folder picker on its GTK thread.
+	FolderRequests <-chan chan FolderResult
+}
+
+// FolderResult contains the selected path, or an empty path when cancelled.
+type FolderResult struct {
+	Path string
+	Err  error
 }
 
 // Run opens the window and returns when it's closed (or Stop fires). It returns ErrUnavailable, without having

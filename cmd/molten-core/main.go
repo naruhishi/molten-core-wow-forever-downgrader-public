@@ -17,7 +17,7 @@ import (
 	"github.com/buildthehomelab/wow-everlake-launcher/internal/pin"
 )
 
-var appVersion = "v1.8.1"
+var appVersion = "v1.9.0"
 
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--app-version" {

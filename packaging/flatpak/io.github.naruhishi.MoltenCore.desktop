@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Molten Core
+GenericName=WoW Forever Version Installer
+GenericName[es]=Instalador de versiones de WoW Forever
+Comment=Install a separate copy of WoW Forever
+Comment[es]=Instala una copia separada de WoW Forever
+Exec=molten-core
+Icon=io.github.naruhishi.MoltenCore
+Terminal=false
+Type=Application
+Categories=Game;Utility;

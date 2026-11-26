@@ -31,6 +31,11 @@ button:hover:not(:disabled){border-color:var(--gold)}button:disabled{opacity:.48
 #status{font:18px Georgia,serif;color:var(--gold)}
 pre{margin:0;height:126px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#0f1013;border:1px solid #343037;padding:10px;color:#d2c9b9;font:12px Consolas,monospace}
 progress{width:100%;height:6px;accent-color:#c99b55;display:block;margin-bottom:8px}
+dialog{width:min(100% - 32px,440px);padding:22px;color:var(--ink);background:var(--panel);border:1px solid #846640;border-radius:4px;box-shadow:0 12px 36px #0009}
+dialog::backdrop{background:rgba(0,0,0,.72)}
+dialog h2{font:24px Georgia,serif;color:var(--gold);margin:0 0 12px}
+dialog p+p{margin-top:8px}
+dialog .actions{justify-content:flex-end}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -55,11 +60,17 @@ progress{width:100%;height:6px;accent-color:#c99b55;display:block;margin-bottom:
 <div class="actions"><button class="primary" id="install"><svg class="icon" aria-hidden="true"><use href="#download"/></svg><span data-t="install"></span></button><button id="validate"><svg class="icon" aria-hidden="true"><use href="#check"/></svg><span data-t="validate"></span></button><button id="cancel" disabled><svg class="icon" aria-hidden="true"><use href="#stop"/></svg><span data-t="cancel"></span></button></div>
 </section>
 <section class="panel">
-<div class="loghead"><span id="appVersion"></span><button id="checkUpdate" data-t="checkUpdate"></button></div>
+<div class="loghead"><span id="appVersion"></span><button id="exitApp" hidden data-t="exitApp"></button><button id="checkUpdate" data-t="checkUpdate"></button></div>
 <div id="updateOffer" hidden><p id="updateQuestion"></p><div class="actions"><button class="primary" id="updateNow" data-t="updateNow"></button><button id="updateLater" data-t="updateLater"></button></div></div>
 </section>
 <section class="panel"><div class="loghead"><strong id="status" aria-live="polite"></strong><button id="copy" data-t="copy" disabled></button></div><progress id="progress" hidden></progress><pre id="log" tabindex="0" aria-label="Registro / Log"></pre></section>
 </main>
+<dialog id="startupNotice" aria-labelledby="startupTitle" aria-describedby="startupIntro startupPolicy">
+<h2 id="startupTitle" data-t="startupTitle"></h2>
+<p id="startupIntro" data-t="startupIntro"></p>
+<p id="startupPolicy" data-t="startupPolicy"></p>
+<form method="dialog" class="actions"><button class="primary" autofocus data-t="startupContinue"></button></form>
+</dialog>
 <script>
 const $ = id => document.getElementById(id);
 const words = {
@@ -93,6 +104,29 @@ const usageKeys=['step1','step2','step3','press','then','step4','step4End'];
 for(const [locale, steps] of Object.entries(usage)){
  for(const [i,key] of usageKeys.entries()) words[locale][key]=steps[i];
 }
+const exits={es:'Cerrar',en:'Exit',fr:'Quitter',pt:'Sair',de:'Beenden',ru:'Выход'};
+for(const locale of Object.keys(words))words[locale].exitApp=exits[locale];
+const folderErrors={
+ es:'No se pudo abrir el selector. Escribe o pega la ruta en el campo.',
+ en:'Could not open the folder picker. Enter or paste the path in the field.',
+ fr:'Impossible d’ouvrir le sélecteur. Saisissez ou collez le chemin dans le champ.',
+ pt:'Não foi possível abrir o seletor. Digite ou cole o caminho no campo.',
+ de:'Der Ordnerdialog konnte nicht geöffnet werden. Gib den Pfad ein oder füge ihn ein.',
+ ru:'Не удалось открыть выбор папки. Введите или вставьте путь в поле.'
+};
+for(const locale of Object.keys(words))words[locale].folderFailed=folderErrors[locale];
+const startupCopy={
+ es:['Aviso de la comunidad','Molten Core fue creado con ayuda de ChatGPT (IA) para la comunidad. Úsalo con precaución.','Si Blizzard Entertainment presenta una reclamación sobre el proyecto, se detendrá el desarrollo. Mientras tanto, Molten Core seguirá siendo de código abierto.','Entendido'],
+ en:['Community notice','Molten Core was created with the help of ChatGPT (AI) for the community. Use it with caution.','If Blizzard Entertainment makes a claim regarding the project, development will stop. Until then, Molten Core will remain open source.','Got it'],
+ fr:['Avis à la communauté','Molten Core a été créé pour la communauté avec l’aide de ChatGPT (IA). Utilisez-le avec prudence.','Si Blizzard Entertainment présente une réclamation concernant le projet, son développement sera arrêté. D’ici là, Molten Core restera open source.','Compris'],
+ pt:['Aviso à comunidade','O Molten Core foi criado para a comunidade com a ajuda do ChatGPT (IA). Use-o com cautela.','Se a Blizzard Entertainment apresentar uma reclamação sobre o projeto, o desenvolvimento será interrompido. Até lá, o Molten Core continuará sendo de código aberto.','Entendi'],
+ de:['Hinweis für die Community','Molten Core wurde mit Hilfe von ChatGPT (KI) für die Community entwickelt. Verwende es mit Vorsicht.','Wenn Blizzard Entertainment einen Anspruch in Bezug auf das Projekt geltend macht, wird die Entwicklung eingestellt. Bis dahin bleibt Molten Core Open Source.','Verstanden'],
+ ru:['Уведомление для сообщества','Molten Core создан для сообщества с помощью ChatGPT (ИИ). Используйте программу с осторожностью.','Если Blizzard Entertainment предъявит претензию в отношении проекта, разработка будет прекращена. До тех пор Molten Core останется проектом с открытым исходным кодом.','Понятно']
+};
+const startupKeys=['startupTitle','startupIntro','startupPolicy','startupContinue'];
+for(const [locale, strings] of Object.entries(startupCopy)){
+ for(const [i,key] of startupKeys.entries()) words[locale][key]=strings[i];
+}
 let current='ready', notice='', suggested='', busy=false, picking=false, release='', dismissed=false, received=0, total=0;
 const tr = key => words[$('language').value][key];
 function render(){
@@ -117,9 +151,9 @@ async function suggest(){
  if(!$('destination').value||$('destination').value===suggested){suggested=next;$('destination').value=next;}
 }
 async function pick(id){
- picking=true;render();
+ notice='';picking=true;render();
  try{const folder=await pickFolder();if(folder)$(id).value=folder;}
- finally{picking=false;render();}
+ catch{notice='folderFailed';} finally{picking=false;render();if(notice==='folderFailed')$(id).focus();}
 }
 async function start(mode){
  const version=$('version').value.trim(),source=$('source').value.trim(),destination=$('destination').value.trim();
@@ -160,7 +194,9 @@ $('copy').onclick=()=>{const range=document.createRange();range.selectNodeConten
 document.addEventListener('dragover', e=>e.preventDefault());
 document.addEventListener('drop', e=>e.preventDefault());
 render();
-if(typeof readJob==='function'){suggest();getAppVersion().then(v=>$('appVersion').textContent=v);setInterval(refresh,450);update(false);}
+$('startupNotice').showModal();
+if(typeof closeApp==='function'){checkUpdate.hidden=true;exitApp.hidden=false;exitApp.onclick=async()=>{await closeApp();document.body.textContent=tr('exitApp');};}
+if(typeof readJob==='function'){suggest();getAppVersion().then(v=>$('appVersion').textContent=v);setInterval(()=>refresh().catch(()=>{}),450);if(typeof checkUpdate==='function')update(false);}
 </script>
 </body>
 </html>

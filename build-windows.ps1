@@ -1,4 +1,4 @@
-param([string]$Version = "v1.7.1", [ValidateSet("private","public")][string]$Channel = "private")
+param([string]$Version = "v1.9.0", [ValidateSet("private","public")][string]$Channel = "public")
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
 try {

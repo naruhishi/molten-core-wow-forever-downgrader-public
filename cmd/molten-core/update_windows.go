@@ -14,7 +14,7 @@ import (
 	"github.com/buildthehomelab/wow-everlake-launcher/internal/selfupdate"
 )
 
-var updateChannel = "private"
+var updateChannel = "public"
 
 const updateEXE = "Molten-Core-WoW-Forever-Downgrader.exe"
 

@@ -1,8 +1,8 @@
 # Molten Core - WoW Forever Downgrader
 
-Instalador independiente de versiones de WoW Forever para Windows.
-Descarga el ejecutable para Windows x64 desde [Releases](../../releases).
-La interfaz está disponible en español, inglés, francés, portugués, alemán y ruso y requiere Microsoft Edge WebView2 Runtime.
+Instalador independiente de versiones de WoW Forever para Windows y Linux.
+Descarga el ejecutable para Windows x64 o el Flatpak para Linux x64 desde [Releases](../../releases).
+La interfaz está disponible en español, inglés, francés, portugués, alemán y ruso. Windows requiere Microsoft Edge WebView2 Runtime. Para Linux, consulta la [guía de instalación del Flatpak](packaging/flatpak/README.md).
 
 1. Cierra WoW y Battle.net.
 2. Selecciona la instalación de origen y una carpeta de destino separada.
@@ -11,7 +11,7 @@ La interfaz está disponible en español, inglés, francés, portugués, alemán
 
 ## Actualizaciones
 
-La edición pública consulta las Releases de este repositorio. La descarga
+La edición pública de Windows consulta las Releases de este repositorio. La descarga
 empieza cuando eliges **Actualizar ahora**. Solo se publican versiones
 aprobadas por el propietario tras las pruebas en el repositorio privado.
 
@@ -27,4 +27,4 @@ responsabilidad y consulta el alcance de la licencia en [GPL-2.0](LICENSE).
 
 En Windows x64 con Go 1.24 o posterior, ejecuta:
 
-    .\build-windows.ps1 -Version v1.8.1 -Channel public
+    .\build-windows.ps1 -Version v1.9.0 -Channel public
