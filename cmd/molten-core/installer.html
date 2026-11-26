@@ -63,7 +63,7 @@ dialog .actions{justify-content:flex-end}
 <div class="loghead"><span id="appVersion"></span><button id="exitApp" hidden data-t="exitApp"></button><button id="checkUpdate" data-t="checkUpdate"></button></div>
 <div id="updateOffer" hidden><p id="updateQuestion"></p><div class="actions"><button class="primary" id="updateNow" data-t="updateNow"></button><button id="updateLater" data-t="updateLater"></button></div></div>
 </section>
-<section class="panel"><div class="loghead"><strong id="status" aria-live="polite"></strong><button id="copy" data-t="copy" disabled></button></div><progress id="progress" hidden></progress><pre id="log" tabindex="0" aria-label="Registro / Log"></pre></section>
+<section class="panel"><div class="loghead"><strong id="status" aria-live="polite"></strong><button id="copy" data-t="copy" disabled></button></div><progress id="progress" aria-labelledby="status" hidden></progress><pre id="log" tabindex="0" aria-label="Registro / Log"></pre></section>
 </main>
 <dialog id="startupNotice" aria-labelledby="startupTitle" aria-describedby="startupIntro startupPolicy">
 <h2 id="startupTitle" data-t="startupTitle"></h2>
@@ -127,7 +127,7 @@ const startupKeys=['startupTitle','startupIntro','startupPolicy','startupContinu
 for(const [locale, strings] of Object.entries(startupCopy)){
  for(const [i,key] of startupKeys.entries()) words[locale][key]=strings[i];
 }
-let current='ready', notice='', suggested='', busy=false, picking=false, release='', dismissed=false, received=0, total=0;
+let current='ready', notice='', suggested='', busy=false, picking=false, release='', dismissed=false, received=0, total=0, dataComplete=0, dataTotal=0;
 const tr = key => words[$('language').value][key];
 function render(){
  document.documentElement.lang=$('language').value;
@@ -139,8 +139,12 @@ function render(){
  if(release)$('updateQuestion').textContent=tr('question')(release);
  $('cancel').disabled=!active||current==='cancelling';
  const bar=$('progress');
- bar.hidden=!active;
- if(total>0&&current==='downloadingUpdate'){
+ bar.hidden=!active&&current!=='installed';
+ if(current==='installed'||(current==='installing'&&dataTotal>0)){
+  const percent=current==='installed'?100:Math.min(99,Math.floor(dataComplete/dataTotal*100));
+  bar.max=100;bar.value=percent;
+  $('status').textContent+=' '+percent+'%';
+ }else if(total>0&&current==='downloadingUpdate'){
   bar.max=total;bar.value=received;
   $('status').textContent+=' '+Math.min(100,Math.floor(received/total*100))+'%';
  }else{bar.removeAttribute('value');}
@@ -168,6 +172,7 @@ async function refresh(){
  const job=await readJob();
  current=job.Status;
  release=job.Release;received=job.Received;total=job.Total;
+ dataComplete=job.DataComplete;dataTotal=job.DataTotal;
  const next=(job.Log||[]).join('\n'), log=$('log');
  if(log.textContent!==next){log.textContent=next;log.scrollTop=log.scrollHeight;}
  $('copy').disabled=!next;

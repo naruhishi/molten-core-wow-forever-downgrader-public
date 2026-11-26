@@ -65,6 +65,10 @@ type Options struct {
 	GameHosts []string
 
 	Log func(format string, args ...any)
+
+	// DataProgress reports verified data entries present in the destination and
+	// the total selected from the manifests. Calls are serialized.
+	DataProgress func(complete, total int)
 }
 
 // Report counts what happened. Bad and Missing are only non-zero after a Verify run or a failed install.
@@ -899,6 +903,9 @@ func (r *run) dataFiles(ctx context.Context, idx []namedIndex, dl *tact.Download
 	locate(idx, want)
 	r.dataKeep = order
 	r.rep.DataFiles = len(order)
+	if r.DataProgress != nil {
+		r.DataProgress(0, len(order))
+	}
 	r.Log("download manifest: %d of %d stored files match %s (plus the build's own files)",
 		len(order)-nsys, len(dl.Entries), strings.Join(r.Tags, " "))
 
@@ -914,7 +921,7 @@ func (r *run) dataFiles(ctx context.Context, idx []namedIndex, dl *tact.Download
 					return err
 				}
 			}
-			r.count(&r.rep.DataKept)
+			r.countData(&r.rep.DataKept)
 			return nil
 		}
 		if r.Verify {
@@ -928,14 +935,14 @@ func (r *run) dataFiles(ctx context.Context, idx []namedIndex, dl *tact.Download
 			if err := r.st.Add(e, data); err != nil {
 				return err
 			}
-			r.count(&r.rep.DataKept)
+			r.countData(&r.rep.DataKept)
 			return nil
 		}
 		if data, err := r.readReuse(e); err == nil {
 			if err := r.st.Add(e, data); err != nil {
 				return err
 			}
-			r.count(&r.rep.DataKept)
+			r.countData(&r.rep.DataKept)
 			return nil
 		}
 		mu.Lock()
@@ -1040,7 +1047,7 @@ func (r *run) dataFiles(ctx context.Context, idx []namedIndex, dl *tact.Download
 			if err := r.store(e, data); err != nil {
 				return err
 			}
-			r.count(&r.rep.DataFetched)
+			r.countData(&r.rep.DataFetched)
 			return nil
 		}
 		part := func(data []byte, e tact.Key) []byte {
@@ -1067,7 +1074,7 @@ func (r *run) dataFiles(ctx context.Context, idx []namedIndex, dl *tact.Download
 			if err := r.store(e, part(data, e)); err != nil {
 				return err
 			}
-			r.count(&r.rep.DataFetched)
+			r.countData(&r.rep.DataFetched)
 		}
 		return nil
 	})
@@ -1133,6 +1140,15 @@ func (r *run) save(p string, data []byte, mode os.FileMode) error {
 // writeFile writes through a temporary file and a rename, so a cut-off run never leaves a half file under the
 // real name.
 func writeFile(p string, data []byte, mode os.FileMode) error { return casc.WriteFile(p, data, mode) }
+
+func (r *run) countData(n *int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	*n++
+	if r.DataProgress != nil {
+		r.DataProgress(r.rep.DataKept+r.rep.DataFetched, r.rep.DataFiles)
+	}
+}
 
 func (r *run) count(n *int) {
 	r.mu.Lock()

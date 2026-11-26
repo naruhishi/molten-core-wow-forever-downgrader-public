@@ -373,7 +373,18 @@ func TestStagedFilesMoveIntoStorage(t *testing.T) {
 	os.Remove(filepath.Join(dir, ".everlake", "archives.json"))
 
 	f.requests()
-	rep, err := f.run(t, dir, nil)
+	complete, total := -1, 0
+	rep, err := f.run(t, dir, func(o *Options) {
+		o.DataProgress = func(done, selected int) {
+			if done != complete+1 || done > selected || (total != 0 && selected != total) {
+				t.Errorf("unexpected progress %d/%d after %d/%d", done, selected, complete, total)
+			}
+			complete, total = done, selected
+		}
+	})
+	if complete != 7 || total != 7 {
+		t.Errorf("final progress %d/%d, want 7/7", complete, total)
+	}
 	if err != nil || rep.Failed() {
 		t.Fatalf("install over staged files: %+v %v", rep, err)
 	}

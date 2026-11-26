@@ -13,10 +13,11 @@ import (
 var page []byte
 
 type jobSnapshot struct {
-	Status          string
-	Log             []string
-	Release         string
-	Received, Total int64
+	Status                  string
+	Log                     []string
+	Release                 string
+	Received, Total         int64
+	DataComplete, DataTotal int
 }
 
 type guiJob struct {
@@ -58,7 +59,11 @@ func (j *guiJob) start(mode, version, source, destination string) error {
 			}
 			j.snapshot.Log = append(j.snapshot.Log, fmt.Sprintf(format, args...))
 		}
-		err := run(ctx, nil, args, logf)
+		err := run(ctx, nil, args, logf, func(complete, total int) {
+			j.mu.Lock()
+			j.snapshot.DataComplete, j.snapshot.DataTotal = complete, total
+			j.mu.Unlock()
+		})
 		result := "installed"
 		if mode == "validate" {
 			result = "validated"

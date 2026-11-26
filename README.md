@@ -33,4 +33,4 @@ para iniciar sesiones y conectarse a servidores no forman parte de este árbol.
 
 En Windows x64 con Go 1.24 o posterior, ejecuta:
 
-    .\build-windows.ps1 -Version v1.9.0 -Channel public
+    .\build-windows.ps1 -Version v1.9.1 -Channel public
