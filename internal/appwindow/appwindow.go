@@ -1,6 +1,4 @@
-// Package appwindow shows the launcher's local page in a window of its own: WebView2 on Windows, WKWebView on
-// macOS. The page is the same one a browser would show (internal/webui); the window only frames it, so the launcher
-// looks like an app instead of a browser tab.
+// Package appwindow hosts the installer interface in a desktop window.
 //
 // Run must be called on the process's main thread: main locks its goroutine to that thread before anything else.
 // Cocoa refuses to run anywhere else, and WebView2 needs its window and message loop on one thread.

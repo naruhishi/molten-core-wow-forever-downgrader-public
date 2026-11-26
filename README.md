@@ -23,6 +23,12 @@ Es un proyecto independiente sin afiliación ni respaldo de Blizzard Entertainme
 El software se proporciona tal cual, sin garantías. Úsalo bajo tu propia
 responsabilidad y consulta el alcance de la licencia en [GPL-2.0](LICENSE).
 
+## Alcance del código fuente
+
+Este árbol contiene el instalador de Molten Core, sus dependencias, pruebas y
+scripts de compilación. Los componentes independientes del lanzador de Everlake
+para iniciar sesiones y conectarse a servidores no forman parte de este árbol.
+
 ## Compilación
 
 En Windows x64 con Go 1.24 o posterior, ejecuta:

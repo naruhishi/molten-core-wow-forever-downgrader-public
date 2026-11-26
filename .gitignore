@@ -1,7 +1,7 @@
 .DS_Store
 .claude/
 /dist/
-/everlake-launcher
-/everlake-launcher.exe
+/molten-core
+/Molten-Core-WoW-Forever-Downgrader.exe
 # written by scripts/winres during a Windows build
 *.syso
