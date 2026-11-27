@@ -39,15 +39,16 @@ import (
 
 // Options say what to put where.
 type Options struct {
-	Adopt      bool   // explicitly update an existing single-product installation in place
-	LowSpace   bool   // reuse local data without duplicating it in an object cache
-	ReuseFrom  string // optional older client root; only verified matching content is copied
-	AssetStore string
-	Dir        string
-	Pin        pin.Pin
-	CDN        *cdn.Client
-	Tags       []string // e.g. OSX, arm64, enUS, US: picks the install and download manifest entries
-	Jobs       int      // parallel requests
+	Adopt       bool   // explicitly update an existing single-product installation in place
+	LowSpace    bool   // reuse local data without duplicating it in an object cache
+	ReuseFrom   string // optional older client root; only verified matching content is copied
+	AssetStore  string
+	ExactRanges bool // fetch adjacent entries together without downloading bytes between them
+	Dir         string
+	Pin         pin.Pin
+	CDN         *cdn.Client
+	Tags        []string // e.g. OSX, arm64, enUS, US: picks the install and download manifest entries
+	Jobs        int      // parallel requests
 
 	// Verify checks what's on disk and writes nothing. It reports every damaged or missing file. Configs, indexes and
 	// manifests it needs in order to go on are read from the CDN when the copy on disk is bad (and reported too).
@@ -56,9 +57,11 @@ type Options struct {
 	// damaged ones still are.
 	PartialData bool
 
-	NoData      bool  // stop after the loose files (skip the download manifest)
-	MaxPriority *int  // only download manifest entries at or below this priority
-	DataLimit   int64 // stop the data stage after about this many bytes (0: no limit); for trial runs
+	NoData         bool  // stop after the loose files (skip the download manifest)
+	KeepLocaleData bool  // install localized data even if it has lower download priority
+	ReuseDeferred  bool  // reuse lower-priority target data locally, without fetching it
+	MaxPriority    *int  // only download manifest entries at or below this priority
+	DataLimit      int64 // stop the data stage after about this many bytes (0: no limit); for trial runs
 
 	// GameHosts are the CDN hosts written into .build.info, which the game streams missing files from (default: the
 	// CDN client's hosts). A mirror used only for the install is left out this way.
@@ -379,12 +382,29 @@ func (r *run) do(ctx context.Context) (*Report, error) {
 		return nil, err
 	}
 
-	if err := r.looseFiles(ctx, idx, inst); err != nil {
+	loose, err := inst.Select(r.Tags)
+	if err != nil {
+		return nil, fmt.Errorf("install manifest: %w", err)
+	}
+	var selected []tact.DownloadEntry
+	if !opts.NoData {
+		selected, err = dl.Select(r.Tags)
+		if err != nil {
+			return nil, fmt.Errorf("download manifest: %w", err)
+		}
+		opts.Log("Manifest filters (%s): %d loose and %d data entries excluded",
+			strings.Join(r.Tags, " "), len(inst.Entries)-len(loose), len(dl.Entries)-len(selected))
+	}
+	if err := r.looseFiles(ctx, idx, loose); err != nil {
 		return nil, err
 	}
 	r.foreign()
 	if !opts.NoData {
-		if err := r.dataFiles(ctx, idx, dl, system); err != nil {
+		var localeData map[tact.Key]bool
+		if opts.KeepLocaleData && opts.MaxPriority != nil {
+			localeData = dl.LocaleData(r.Tags)
+		}
+		if err := r.dataFiles(ctx, idx, selected, system, localeData); err != nil {
 			return nil, err
 		}
 	}
@@ -769,11 +789,7 @@ func (r *run) blob(ctx context.Context, e, c tact.Key, w *where) ([]byte, error)
 // --- loose files -------------------------------------------------------------------------------------------------
 
 // looseFiles writes (or checks) the install manifest's files for the wanted tags into the game folder.
-func (r *run) looseFiles(ctx context.Context, idx []namedIndex, inst *tact.Install) error {
-	entries, err := inst.Select(r.Tags)
-	if err != nil {
-		return fmt.Errorf("install manifest: %w", err)
-	}
+func (r *run) looseFiles(ctx context.Context, idx []namedIndex, entries []tact.InstallEntry) error {
 	type job struct {
 		e    tact.InstallEntry
 		ekey tact.Key
@@ -807,7 +823,7 @@ func (r *run) looseFiles(ctx context.Context, idx []namedIndex, inst *tact.Insta
 	}
 	locate(idx, want)
 	r.rep.LooseFiles = len(jobs)
-	r.Log("install manifest: %d of %d loose files match %s", len(jobs), len(inst.Entries), strings.Join(r.Tags, " "))
+	r.Log("install manifest: %d loose files selected", len(jobs))
 	return r.parallel(ctx, len(jobs), func(ctx context.Context, i int) error {
 		j := jobs[i]
 		data, err := os.ReadFile(j.path)
@@ -872,12 +888,8 @@ type span struct {
 	files   []tact.Key // with their places in want
 }
 
-// dataFiles stores (or checks) the download manifest's files for the wanted tags, plus the build's own files.
-func (r *run) dataFiles(ctx context.Context, idx []namedIndex, dl *tact.Download, system map[string][2]tact.Key) error {
-	entries, err := dl.Select(r.Tags)
-	if err != nil {
-		return fmt.Errorf("download manifest: %w", err)
-	}
+// dataFiles stores or checks selected download entries and the build's own files.
+func (r *run) dataFiles(ctx context.Context, idx []namedIndex, entries []tact.DownloadEntry, system map[string][2]tact.Key, localeData map[tact.Key]bool) error {
 	var order []tact.Key
 	want := map[tact.Key]*where{}
 	manifestSize := map[tact.Key]int64{}
@@ -893,9 +905,27 @@ func (r *run) dataFiles(ctx context.Context, idx []namedIndex, dl *tact.Download
 		isSystem[k[1]] = true
 	}
 	nsys := len(order)
+	deferred, localeRequired := 0, 0
+	localOnly := map[tact.Key]bool{}
 	for _, e := range entries {
-		if r.MaxPriority != nil && e.Priority > *r.MaxPriority {
-			continue
+		lowerPriority := r.MaxPriority != nil && e.Priority > *r.MaxPriority
+		if lowerPriority && localeData[e.EKey] {
+			localeRequired++
+		}
+		if lowerPriority && !localeData[e.EKey] {
+			deferred++
+			if !r.ReuseDeferred || r.Verify || r.reuse == nil {
+				continue
+			}
+			if _, ok := r.reuse.Lookup(e.EKey); !ok {
+				continue
+			}
+			if _, required := want[e.EKey]; !required {
+				localOnly[e.EKey] = true
+			}
+		} else {
+			// A required entry takes precedence if a key appears more than once.
+			localOnly[e.EKey] = false
 		}
 		add(e.EKey)
 		manifestSize[e.EKey] = int64(e.Size)
@@ -906,14 +936,28 @@ func (r *run) dataFiles(ctx context.Context, idx []namedIndex, dl *tact.Download
 	if r.DataProgress != nil {
 		r.DataProgress(0, len(order))
 	}
-	r.Log("download manifest: %d of %d stored files match %s (plus the build's own files)",
-		len(order)-nsys, len(dl.Entries), strings.Join(r.Tags, " "))
+	r.Log("download manifest: %d selected data files plus %d build files", len(order)-nsys, nsys)
 
 	// Keep what's already stored and intact.
 	var need []tact.Key
+	var reusedDeferred int
 	var mu sync.Mutex
-	err = r.parallel(ctx, len(order), func(ctx context.Context, i int) error {
+	err := r.parallel(ctx, len(order), func(ctx context.Context, i int) error {
 		e := order[i]
+		if localOnly[e] {
+			data, err := r.readReuse(e)
+			if err == nil {
+				if err := r.st.Add(e, data); err != nil {
+					return err
+				}
+				mu.Lock()
+				reusedDeferred++
+				mu.Unlock()
+				r.countData(&r.rep.DataKept)
+				return nil
+			}
+			return nil
+		}
 		data, err := r.st.Read(e)
 		if err == nil && tact.VerifyBLTE(data, e) == nil {
 			if !r.Verify {
@@ -953,6 +997,12 @@ func (r *run) dataFiles(ctx context.Context, idx []namedIndex, dl *tact.Download
 	if err != nil || r.Verify {
 		return err
 	}
+	if r.KeepLocaleData {
+		r.Log("Archivos de idioma incluidos fuera de la prioridad inicial / Language entries included above startup priority: %d", localeRequired)
+	}
+	if r.MaxPriority != nil {
+		r.Log("Prioridad de inicio / Startup priority: %d; reutilizadas / reused: %d; diferidas / deferred: %d", *r.MaxPriority, reusedDeferred, deferred-reusedDeferred)
+	}
 	var required uint64
 	for _, key := range need {
 		size := manifestSize[key]
@@ -977,6 +1027,9 @@ func (r *run) dataFiles(ctx context.Context, idx []namedIndex, dl *tact.Download
 	}
 	sort.Slice(need, func(a, b int) bool { return pos[need[a]] < pos[need[b]] })
 	gap := int64(spanGap)
+	if r.ExactRanges {
+		gap = 0
+	}
 	if r.DataLimit > 0 {
 		// The build's own files sort first and never count against the limit. With a limit, ranges don't read
 		// through gaps, so the bytes downloaded stay close to the budget.

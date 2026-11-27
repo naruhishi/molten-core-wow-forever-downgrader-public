@@ -17,7 +17,7 @@ import (
 	"github.com/buildthehomelab/wow-everlake-launcher/internal/pin"
 )
 
-var appVersion = "v1.9.1"
+var appVersion = "v1.9.2"
 
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--app-version" {
@@ -42,7 +42,7 @@ func main() {
 			cancel()
 		}()
 	}
-	err := run(ctx, input, args, func(format string, args ...any) { fmt.Printf(format+"\n", args...) }, nil)
+	err := run(ctx, input, args, "enUS", func(format string, args ...any) { fmt.Printf(format+"\n", args...) }, nil)
 	if err != nil && ctx.Err() != nil {
 		os.Exit(2)
 	}
@@ -58,7 +58,7 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, input *bufio.Reader, args []string, logf func(string, ...any), dataProgress func(int, int)) error {
+func run(ctx context.Context, input *bufio.Reader, args []string, locale string, logf func(string, ...any), dataProgress func(int, int)) error {
 	target := pin.Default()
 	if len(args) == 1 && args[0] == "--version" {
 		fmt.Println(target.Version)
@@ -164,18 +164,27 @@ func run(ctx context.Context, input *bufio.Reader, args []string, logf func(stri
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// The game can stream lower-priority assets from the CDN listed in .build.info.
+	startupPriority := 0
 	report, err := install.Run(ctx, install.Options{
 		Dir: destination, ReuseFrom: source, Pin: target,
 		CDN: cdn.New(append([]string{manifestHost}, hosts...), target.CDNPath), GameHosts: hosts,
-		Tags:         clientTags(),
-		Log:          logf,
-		DataProgress: dataProgress,
+		Tags:           clientTags(locale),
+		ExactRanges:    true,
+		MaxPriority:    &startupPriority,
+		ReuseDeferred:  true,
+		KeepLocaleData: true,
+		Log:            logf,
+		DataProgress:   dataProgress,
 	})
 	if err != nil {
 		return err
 	}
 	if report.Failed() {
 		return errors.New("la instalacion contiene archivos faltantes o invalidos")
+	}
+	if err := configureGameLocale(filepath.Join(destination, target.GameFolder), locale); err != nil {
+		return fmt.Errorf("configurar idioma del juego / configure game language: %w", err)
 	}
 	logf("Listo / Ready. %.2f GiB. Cliente / Client: %s", float64(report.BytesDownloaded)/(1<<30), filepath.Join(destination, target.GameFolder))
 	return nil
@@ -190,7 +199,7 @@ func validate(ctx context.Context, version string, logf func(string, ...any)) (p
 	return target, err
 }
 
-func clientTags() []string {
+func clientTags(locale string) []string {
 	platform, arch := "Windows", "x86_64"
 	if runtime.GOOS == "darwin" {
 		platform = "OSX"
@@ -198,5 +207,5 @@ func clientTags() []string {
 			arch = "arm64"
 		}
 	}
-	return []string{platform, arch, "enUS", "US"}
+	return []string{platform, arch, locale, "US"}
 }

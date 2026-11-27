@@ -77,6 +77,34 @@ func (f *fakeBuild) requests() int {
 	return n
 }
 
+func TestLocaleSelectionAndExactRanges(t *testing.T) {
+	f := newFakeBuild(t)
+	regular, err := f.run(t, t.TempDir(), nil)
+	if err != nil || regular.Failed() {
+		t.Fatalf("regular install: %+v %v", regular, err)
+	}
+	exact, err := f.run(t, t.TempDir(), func(o *Options) { o.ExactRanges = true })
+	if err != nil || exact.Failed() || exact.DataFiles != regular.DataFiles ||
+		exact.BytesDownloaded >= regular.BytesDownloaded {
+		t.Fatalf("exact ranges should transfer less for the same files: regular=%+v exact=%+v err=%v", regular, exact, err)
+	}
+	dir := t.TempDir()
+	localized, err := f.run(t, dir, func(o *Options) {
+		o.Tags = []string{"OSX", "frFR"}
+		o.ExactRanges = true
+	})
+	if err != nil || localized.Failed() {
+		t.Fatalf("localized install: %+v %v", localized, err)
+	}
+	if !stored(t, dir, f.Data["mac-art"]) || stored(t, dir, f.Data["shared-art"]) {
+		t.Fatal("the stored files did not match the selected locale")
+	}
+	info, err := os.ReadFile(filepath.Join(dir, ".build.info"))
+	if err != nil || !strings.Contains(string(info), "frFR speech?") || !strings.Contains(string(info), "frFR text?") {
+		t.Fatalf("unexpected language tags in build info: %s (%v)", info, err)
+	}
+}
+
 func TestInstallVerifyRepair(t *testing.T) {
 	f := newFakeBuild(t)
 	dir := t.TempDir()
@@ -189,9 +217,14 @@ func TestInstallLooseOnlyAndLimits(t *testing.T) {
 	}
 
 	zero := 0
-	rep, err = f.run(t, t.TempDir(), func(o *Options) { o.MaxPriority = &zero })
+	startupDir := t.TempDir()
+	rep, err = f.run(t, startupDir, func(o *Options) { o.MaxPriority = &zero; o.ExactRanges = true })
 	if err != nil || rep.DataFiles != 5+1 {
 		t.Fatalf("max priority 0: %+v %v", rep, err)
+	}
+
+	if !stored(t, startupDir, f.Data["mac-art"]) || stored(t, startupDir, f.Data["shared-art"]) {
+		t.Fatal("startup install must keep priority zero and defer lower-priority data")
 	}
 
 	// The build's own 5 files never count against the limit; of the 2 content files, the first fits.
@@ -202,6 +235,47 @@ func TestInstallLooseOnlyAndLimits(t *testing.T) {
 
 	if _, err := f.run(t, t.TempDir(), func(o *Options) { o.Tags = []string{"Linux"} }); err == nil {
 		t.Error("unknown tag accepted")
+	}
+}
+
+func TestStartupIncludesLocaleDataAbovePriority(t *testing.T) {
+	f := newFakeBuild(t)
+	dir := t.TempDir()
+	priority := 0
+	rep, err := f.run(t, dir, func(o *Options) {
+		o.MaxPriority = &priority
+		o.KeepLocaleData = true
+		o.ExactRanges = true
+	})
+	// The fixture tags shared-art for English but not French; its priority is 1.
+	if err != nil || rep.Failed() || !stored(t, dir, f.Data["shared-art"]) ||
+		stored(t, dir, f.Data["windows-art"]) {
+		t.Fatalf("localized startup: %+v %v", rep, err)
+	}
+}
+
+func TestStartupReusesDeferredDataWithoutDownloadingIt(t *testing.T) {
+	f := newFakeBuild(t)
+	source := t.TempDir()
+	if rep, err := f.run(t, source, nil); err != nil || rep.Failed() {
+		t.Fatalf("source install: %+v %v", rep, err)
+	}
+	key := f.Data["shared-art"]
+	priority := 0
+	for _, damaged := range []bool{false, true} {
+		if damaged {
+			damageStored(t, source, key)
+		}
+		dest := t.TempDir()
+		rep, err := f.run(t, dest, func(o *Options) {
+			o.ReuseFrom = source
+			o.MaxPriority = &priority
+			o.ReuseDeferred = true
+			o.ExactRanges = true
+		})
+		if err != nil || rep.Failed() || rep.DataFetched != 0 || stored(t, dest, key) == damaged {
+			t.Fatalf("deferred data (damaged=%v): %+v %v", damaged, rep, err)
+		}
 	}
 }
 

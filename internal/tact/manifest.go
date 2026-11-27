@@ -235,6 +235,41 @@ func ParseDownload(data []byte) (*Download, error) {
 	return m, nil
 }
 
+// LocaleData returns keys tagged for the selected locale but not for every
+// language in the manifest. Shared assets remain eligible for streaming.
+func (m *Download) LocaleData(wanted []string) map[Key]bool {
+	var selected *Tag
+	var locales []Tag
+	for i := range m.Tags {
+		tag := &m.Tags[i]
+		if tag.Type != TagLocale {
+			continue
+		}
+		locales = append(locales, *tag)
+		for _, name := range wanted {
+			if strings.EqualFold(name, tag.Name) {
+				selected = tag
+			}
+		}
+	}
+	keys := make(map[Key]bool)
+	if selected == nil {
+		return keys
+	}
+	for i, entry := range m.Entries {
+		if !selected.Has(i) {
+			continue
+		}
+		for _, tag := range locales {
+			if !tag.Has(i) {
+				keys[entry.EKey] = true
+				break
+			}
+		}
+	}
+	return keys
+}
+
 // Select returns the entries that match the wanted tags (see selectEntries), in manifest order.
 func (m *Download) Select(wanted []string) ([]DownloadEntry, error) {
 	in, err := selectEntries(m.Tags, len(m.Entries), wanted)

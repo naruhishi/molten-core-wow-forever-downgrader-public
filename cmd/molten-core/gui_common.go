@@ -30,7 +30,7 @@ type guiJob struct {
 	updated  bool
 }
 
-func (j *guiJob) start(mode, version, source, destination string) error {
+func (j *guiJob) start(mode, version, source, destination, locale string) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.cancel != nil || j.updated {
@@ -38,6 +38,11 @@ func (j *guiJob) start(mode, version, source, destination string) error {
 	}
 	if !versionPattern.MatchString(version) {
 		return fmt.Errorf("version must contain four numeric components")
+	}
+	switch locale {
+	case "enUS", "enGB", "esES", "esMX", "frFR", "deDE", "ptBR", "itIT", "ruRU", "koKR", "zhTW", "zhCN":
+	default:
+		return fmt.Errorf("unsupported game language")
 	}
 	args := []string{"--validate", version}
 	status := "validating"
@@ -59,7 +64,7 @@ func (j *guiJob) start(mode, version, source, destination string) error {
 			}
 			j.snapshot.Log = append(j.snapshot.Log, fmt.Sprintf(format, args...))
 		}
-		err := run(ctx, nil, args, logf, func(complete, total int) {
+		err := run(ctx, nil, args, locale, logf, func(complete, total int) {
 			j.mu.Lock()
 			j.snapshot.DataComplete, j.snapshot.DataTotal = complete, total
 			j.mu.Unlock()

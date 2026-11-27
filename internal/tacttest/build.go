@@ -49,6 +49,7 @@ func NewBuild(t testing.TB) *Build {
 		{Name: "OSX", Type: tact.TagPlatform, Entries: []int{0, 2}},
 		{Name: "Windows", Type: tact.TagPlatform, Entries: []int{1, 2}},
 		{Name: "enUS", Type: tact.TagLocale, Entries: []int{0, 1, 2}},
+		{Name: "frFR", Type: tact.TagLocale, Entries: []int{0, 1, 2}},
 	}
 	macC, _ := store(f.MacBinary)
 	exeC, _ := store(f.Exe)
@@ -68,6 +69,7 @@ func NewBuild(t testing.TB) *Build {
 		{Name: "OSX", Type: tact.TagPlatform, Entries: []int{0, 1}},
 		{Name: "Windows", Type: tact.TagPlatform, Entries: []int{1, 2}},
 		{Name: "enUS", Type: tact.TagLocale, Entries: []int{0, 1, 2}},
+		{Name: "frFR", Type: tact.TagLocale, Entries: []int{0}},
 	}, dl)
 	instC, instE := store(install)
 	dlC, dlE := store(download)

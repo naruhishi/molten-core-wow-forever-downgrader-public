@@ -6,7 +6,7 @@ el entorno desde Flathub.
 
 Con Flathub disponible, instala y abre el paquete:
 
-    flatpak install --user ./Molten-Core-v1.9.1-Linux-x64.flatpak
+    flatpak install --user ./Molten-Core-v1.9.2-Linux-x64.flatpak
     flatpak run io.github.naruhishi.MoltenCore
 
 El paquete tiene acceso a la red para descargar el cliente y a tu carpeta
@@ -18,4 +18,4 @@ Para construir el paquete a partir del código en Linux x64 con Go, un
 compilador C y Flatpak:
 
     CGO_ENABLED=1 go build -trimpath -o molten-core ./cmd/molten-core
-    bash packaging/flatpak/package.sh ./molten-core Molten-Core-v1.9.1-Linux-x64.flatpak
+    bash packaging/flatpak/package.sh ./molten-core Molten-Core-v1.9.2-Linux-x64.flatpak
