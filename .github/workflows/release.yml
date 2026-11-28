@@ -4,7 +4,8 @@ name: Release
 # Molten-Core-WoW-Forever-Downgrader.exe, Molten-Core-Windows-x64.zip, Molten-Core-vX.Y.Z-Linux-x64.flatpak and
 # SHA256SUMS.txt. In the private repository the release is a prerelease, for testing: the private updater only offers
 # full releases. In the -public repository it is a full release on the public update channel.
-# The notes come from .github/release-notes/vX.Y.Z.md when that file exists.
+# The notes come from .github/release-notes/vX.Y.Z.md when that file exists. In the -public repository it also
+# points the website (gh-pages) to the new Linux Flatpak.
 # Run it by hand (workflow_dispatch) with the version to release the chosen branch's commit: the release then creates
 # the tag on that commit.
 
@@ -109,3 +110,27 @@ jobs:
             *) args+=(--prerelease) ;;
           esac
           gh release create "$VERSION" "${args[@]}" out/*
+      - name: Point the website to this release
+        # The public repository's GitHub Pages site (gh-pages branch) links the Linux Flatpak by version; the Windows
+        # button already follows the latest release.
+        if: endsWith(github.repository, '-public')
+        run: |
+          if ! git fetch --depth 1 origin gh-pages; then
+            echo "No gh-pages branch: nothing to update"
+            exit 0
+          fi
+          git worktree add pages FETCH_HEAD
+          cd pages
+          sed -i -E "s#releases/download/v[0-9]+\.[0-9]+\.[0-9]+/Molten-Core-v[0-9]+\.[0-9]+\.[0-9]+-Linux-x64\.flatpak#releases/download/$VERSION/Molten-Core-$VERSION-Linux-x64.flatpak#g" index.html
+          grep -q "releases/download/$VERSION/Molten-Core-$VERSION-Linux-x64.flatpak" index.html || {
+            echo "::error::index.html has no Linux Flatpak link to update"
+            exit 1
+          }
+          if git diff --quiet; then
+            echo "The website already points to $VERSION"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "Point the Linux download to Molten Core $VERSION"
+          git push origin HEAD:gh-pages
