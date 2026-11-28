@@ -18,7 +18,7 @@ import (
 	"github.com/buildthehomelab/wow-everlake-launcher/internal/pin"
 )
 
-var appVersion = "v1.9.3"
+var appVersion = "v1.9.4"
 
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--app-version" {
@@ -59,8 +59,16 @@ func main() {
 	}
 }
 
+// highResFlag adds the optional high-resolution textures (the download manifest's HighRes content, about 37 GiB),
+// which are left out by default.
+const highResFlag = "--high-res"
+
 func run(ctx context.Context, input *bufio.Reader, args []string, locale string, logf func(string, ...any), dataProgress func(int, int)) error {
 	target := pin.Default()
+	var optional []string
+	if len(args) > 0 && args[0] == highResFlag {
+		optional, args = []string{"HighRes"}, args[1:]
+	}
 	if len(args) == 1 && args[0] == "--version" {
 		fmt.Println(target.Version)
 		return nil
@@ -86,7 +94,7 @@ func run(ctx context.Context, input *bufio.Reader, args []string, locale string,
 		}
 	}
 	if len(args) != 2 || args[0] == "" || args[1] == "" {
-		return errors.New("uso: Molten-Core-WoW-Forever-Downgrader.exe <carpeta WoW Forever> <carpeta destino>")
+		return errors.New("uso: Molten-Core-WoW-Forever-Downgrader.exe [--high-res] [--target <version>] <carpeta WoW Forever> <carpeta destino>")
 	}
 	source := filepath.Clean(args[0])
 	if strings.EqualFold(filepath.Base(source), "_forever_") {
@@ -171,16 +179,18 @@ func run(ctx context.Context, input *bufio.Reader, args []string, locale string,
 		return err
 	}
 	// A complete client: every data file the download manifest lists for this
-	// platform and language, not only the startup set the game would otherwise
-	// stream later. Matching files are copied from the source installation and
+	// platform and language (plus the high-resolution textures if asked), not only
+	// the startup set the game would otherwise stream later. Matching files are copied from the source installation and
 	// only the rest is fetched, in exact byte ranges.
 	report, err := install.Run(ctx, install.Options{
 		Dir: destination, ReuseFrom: source, Pin: target,
 		CDN: cdn.New(append([]string{manifestHost}, hosts...), target.CDNPath), GameHosts: hosts,
-		Tags:         clientTags(locale),
-		ExactRanges:  true,
-		Log:          logf,
-		DataProgress: dataProgress,
+		Tags: clientTags(locale),
+		// Optional content (high-resolution textures) only when asked for.
+		OptionalContent: optional,
+		ExactRanges:     true,
+		Log:             logf,
+		DataProgress:    dataProgress,
 	})
 	if err != nil {
 		return err

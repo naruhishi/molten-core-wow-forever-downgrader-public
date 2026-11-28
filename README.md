@@ -11,6 +11,8 @@ La interfaz está disponible en español, inglés, francés, portugués, alemán
 
 La copia es un cliente completo de la versión elegida para tu plataforma y el
 idioma seleccionado: no depende de que el juego descargue datos al arrancar.
+Las texturas de alta resolución (unos 37 GiB) son opcionales: marca la casilla
+**Texturas de alta resolución** si las quieres. Por defecto no se instalan.
 Los archivos que ya coinciden en la instalación de Battle.net se copian y
 verifican localmente (el origen solo se lee, nunca se modifica); solo se
 descarga del CDN lo que falta o cambió. Asegúrate de tener espacio libre
@@ -40,4 +42,4 @@ para iniciar sesiones y conectarse a servidores no forman parte de este árbol.
 
 En Windows x64 con Go 1.24 o posterior, ejecuta:
 
-    .\build-windows.ps1 -Version v1.9.3 -Channel public
+    .\build-windows.ps1 -Version v1.9.4 -Channel public

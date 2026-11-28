@@ -67,7 +67,10 @@ func launchGUI() bool {
 				http.NotFound(w, r)
 				return
 			}
-			var call struct{ Action, Mode, Version, Source, Destination, Locale string }
+			var call struct {
+				Action, Mode, Version, Source, Destination, Locale string
+				HighRes                                            bool
+			}
 			if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&call) != nil {
 				http.Error(w, "Invalid request", http.StatusBadRequest)
 				return
@@ -79,7 +82,7 @@ func launchGUI() bool {
 					http.Error(w, "Invalid mode", http.StatusBadRequest)
 					return
 				}
-				if err := job.start(call.Mode, call.Version, call.Source, call.Destination, call.Locale); err != nil {
+				if err := job.start(call.Mode, call.Version, call.Source, call.Destination, call.Locale, call.HighRes); err != nil {
 					http.Error(w, err.Error(), http.StatusConflict)
 					return
 				}
@@ -188,7 +191,7 @@ async function localRPC(Action, args={}){
  if(!response.ok) throw Error(await response.text());
  return await response.json();
 }
-function startJob(Mode,Version,Source,Destination,Locale){return localRPC('start',{Mode,Version,Source,Destination,Locale});}
+function startJob(Mode,Version,Source,Destination,Locale,HighRes){return localRPC('start',{Mode,Version,Source,Destination,Locale,HighRes:!!HighRes});}
 function cancelJob(){return localRPC('cancel');}
 function readJob(){return localRPC('read');}
 function getAppVersion(){return localRPC('version');}

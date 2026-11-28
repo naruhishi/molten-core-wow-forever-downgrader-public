@@ -53,7 +53,8 @@ func ActiveBuilds(dir string) ([]BuildRow, error) {
 			return nil, fmt.Errorf("malformed .build.info row")
 		}
 		if cells[columns["Active"]] == "1" {
-			rows = append(rows, BuildRow{cells[columns["Product"]], cells[columns["Version"]], cells[columns["Build Key"]], cells[columns["CDN Key"]]})
+			rows = append(rows, BuildRow{Product: cells[columns["Product"]], Version: cells[columns["Version"]],
+				Build: cells[columns["Build Key"]], CDN: cells[columns["CDN Key"]]})
 		}
 	}
 	return rows, scanner.Err()
@@ -67,7 +68,7 @@ func CheckBuild(dir string, p pin.Pin) error {
 	if err != nil {
 		return err
 	}
-	want := BuildRow{p.Product, p.Version, p.BuildConfig, p.CDNConfig}
+	want := BuildRow{Product: p.Product, Version: p.Version, Build: p.BuildConfig, CDN: p.CDNConfig}
 	if len(rows) != 1 || rows[0] != want {
 		return fmt.Errorf("%s needs exactly one active build matching %s %s (%s / %s)", dir, p.Product, p.Version, p.BuildConfig, p.CDNConfig)
 	}

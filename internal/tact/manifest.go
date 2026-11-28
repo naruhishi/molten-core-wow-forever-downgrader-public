@@ -15,6 +15,9 @@ const (
 	TagLocale       = 3 // enUS, deDE, ...
 	TagRegion       = 4 // US, EU, ...
 	TagCategory     = 5 // speech, text
+	// TagOption marks optional content a player turns on in Battle.net, such as HighRes (high-resolution
+	// textures) or Alternate. Its entries are left out unless the option is among the wanted tags.
+	TagOption = 0x4000
 )
 
 // Tag is a named group of manifest entries, kept as a bitmask over the entry list.
@@ -62,19 +65,31 @@ func readTags(data []byte, at, count, entries int) ([]Tag, int, error) {
 
 // selectEntries returns, for each entry, whether it matches the wanted tag names. Wanted tags are grouped by type:
 // an entry is in when, for every type that has a wanted tag, it carries at least one of that type's wanted tags.
-// Types with no wanted tag don't filter. Unknown names are an error, so a typo can't silently select everything.
+// Types with no wanted tag don't filter, except optional content (TagOption): an entry with an option's tag is out
+// unless that option is wanted. Unknown names are an error, so a typo can't silently select everything.
 func selectEntries(tags []Tag, entries int, wanted []string) ([]bool, error) {
 	byType := map[uint16][]Tag{}
+	enabled := map[string]bool{}
 	for _, w := range wanted {
 		found := false
 		for _, t := range tags {
 			if strings.EqualFold(t.Name, w) {
-				byType[t.Type] = append(byType[t.Type], t)
+				if t.Type == TagOption {
+					enabled[strings.ToLower(t.Name)] = true
+				} else {
+					byType[t.Type] = append(byType[t.Type], t)
+				}
 				found = true
 			}
 		}
 		if !found {
 			return nil, fmt.Errorf("the manifest has no tag %q", w)
+		}
+	}
+	var excluded []Tag
+	for _, t := range tags {
+		if t.Type == TagOption && !enabled[strings.ToLower(t.Name)] {
+			excluded = append(excluded, t)
 		}
 	}
 	in := make([]bool, entries)
@@ -91,6 +106,11 @@ func selectEntries(tags []Tag, entries int, wanted []string) ([]bool, error) {
 			if !hit {
 				in[i] = false
 				break
+			}
+		}
+		for _, t := range excluded {
+			if in[i] && t.Has(i) {
+				in[i] = false
 			}
 		}
 	}

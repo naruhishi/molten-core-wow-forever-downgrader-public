@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -842,5 +843,27 @@ func TestCompleteInstallRemovesUnrecordedData(t *testing.T) {
 	}
 	if stored(t, dir, f.Data["windows-art"]) || !stored(t, dir, f.Data["mac-art"]) {
 		t.Fatal("data the build doesn't use was kept, or data it uses was removed")
+	}
+}
+
+func TestOptionalContentFollowsTheSource(t *testing.T) {
+	f := newFakeBuild(t)
+	dir := t.TempDir()
+	rep, err := f.run(t, dir, nil)
+	if err != nil || rep.Failed() || stored(t, dir, f.Data["hires-art"]) {
+		t.Fatalf("default install includes optional content: %+v %v", rep, err)
+	}
+	// A Battle.net install with high-resolution textures turned on lists HighRes in its tags.
+	rep, err = f.run(t, dir, func(o *Options) { o.OptionalContent = []string{"OSX", "US", "HighRes", "speech"} })
+	if err != nil || rep.Failed() || !stored(t, dir, f.Data["hires-art"]) {
+		t.Fatalf("install with HighRes: %+v %v", rep, err)
+	}
+	if s, err := ReadState(dir); err != nil || !slices.Contains(s.Options, "HighRes") {
+		t.Fatalf("state: %+v %v", s, err)
+	}
+	// Turned off again (or a copy made with every option, as Molten Core did before): the optional data goes.
+	rep, err = f.run(t, dir, nil)
+	if err != nil || rep.Failed() || stored(t, dir, f.Data["hires-art"]) || rep.PrunedData != 1 {
+		t.Fatalf("install without HighRes: %+v %v", rep, err)
 	}
 }

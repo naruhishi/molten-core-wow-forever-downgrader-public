@@ -23,6 +23,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -48,7 +49,11 @@ type Options struct {
 	Pin         pin.Pin
 	CDN         *cdn.Client
 	Tags        []string // e.g. OSX, arm64, enUS, US: picks the install and download manifest entries
-	Jobs        int      // parallel requests
+	// OptionalContent turns on optional content (tact.TagOption: HighRes textures, Alternate) by tag name, as a Battle.net
+	// install lists it in its .build.info Tags. Names that aren't an option in a manifest are ignored. Without them,
+	// optional content is left out, as Battle.net does by default.
+	OptionalContent []string
+	Jobs            int // parallel requests
 
 	// Verify checks what's on disk and writes nothing. It reports every damaged or missing file. Configs, indexes and
 	// manifests it needs in order to go on are read from the CDN when the copy on disk is bad (and reported too).
@@ -387,18 +392,28 @@ func (r *run) do(ctx context.Context) (*Report, error) {
 		return nil, err
 	}
 
-	loose, err := inst.Select(r.Tags)
+	loose, err := inst.Select(r.withOptions(inst.Tags))
 	if err != nil {
 		return nil, fmt.Errorf("install manifest: %w", err)
 	}
 	var selected []tact.DownloadEntry
 	if !opts.NoData {
-		selected, err = dl.Select(r.Tags)
+		wanted := r.withOptions(dl.Tags)
+		selected, err = dl.Select(wanted)
 		if err != nil {
 			return nil, fmt.Errorf("download manifest: %w", err)
 		}
 		opts.Log("Manifest filters (%s): %d loose and %d data entries excluded",
-			strings.Join(r.Tags, " "), len(inst.Entries)-len(loose), len(dl.Entries)-len(selected))
+			strings.Join(wanted, " "), len(inst.Entries)-len(loose), len(dl.Entries)-len(selected))
+		var skipped []string
+		for _, t := range dl.Tags {
+			if t.Type == tact.TagOption && !slices.Contains(wanted, t.Name) {
+				skipped = append(skipped, t.Name)
+			}
+		}
+		if len(skipped) > 0 {
+			opts.Log("Contenido opcional no instalado / Optional content not installed: %s", strings.Join(skipped, ", "))
+		}
 	}
 	if err := r.looseFiles(ctx, idx, loose); err != nil {
 		return nil, err
@@ -515,6 +530,19 @@ func (r *run) savePartial() error {
 		return err
 	}
 	return writeFile(r.partialPath(), append(data, '\n'), 0o644)
+}
+
+// withOptions is the tags to select by in a manifest with these tags: r.Tags and the wanted options it has.
+func (r *run) withOptions(known []tact.Tag) []string {
+	tags := append([]string(nil), r.Tags...)
+	for _, name := range r.OptionalContent {
+		for _, t := range known {
+			if t.Type == tact.TagOption && strings.EqualFold(t.Name, name) && !slices.Contains(tags, t.Name) {
+				tags = append(tags, t.Name)
+			}
+		}
+	}
+	return tags
 }
 
 // compactWaste is the unused space an archive must hold before an install rewrites it (see casc.Storage.Compact).
@@ -1368,6 +1396,7 @@ type State struct {
 	LowSpace    bool      `json:"low_space,omitempty"`
 	Pin         pin.Pin   `json:"pin"`
 	Tags        []string  `json:"tags"`
+	Options     []string  `json:"options,omitempty"` // optional content turned on (see Options.OptionalContent)
 	NoData      bool      `json:"loose_files_only,omitempty"`
 	MaxPriority *int      `json:"max_priority,omitempty"`
 	DataLimit   int64     `json:"data_limit_bytes,omitempty"` // a trial run: not every data file was fetched
@@ -1390,7 +1419,7 @@ type FileFP struct {
 var ErrNoFingerprints = errors.New("this install has no quick-check fingerprints; run a full verify")
 
 func (r *run) writeState() error {
-	s := State{LowSpace: r.LowSpace, Pin: r.Pin, Tags: r.Tags, NoData: r.NoData, MaxPriority: r.MaxPriority, Installed: time.Now().UTC()}
+	s := State{LowSpace: r.LowSpace, Pin: r.Pin, Tags: r.Tags, Options: r.OptionalContent, NoData: r.NoData, MaxPriority: r.MaxPriority, Installed: time.Now().UTC()}
 	if r.rep.DataSkippedByLimit > 0 {
 		s.DataLimit = r.DataLimit
 	}

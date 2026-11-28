@@ -30,7 +30,7 @@ type guiJob struct {
 	updated  bool
 }
 
-func (j *guiJob) start(mode, version, source, destination, locale string) error {
+func (j *guiJob) start(mode, version, source, destination, locale string, highRes bool) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.cancel != nil || j.updated {
@@ -48,6 +48,9 @@ func (j *guiJob) start(mode, version, source, destination, locale string) error 
 	status := "validating"
 	if mode == "install" {
 		args = []string{"--target", version, source, destination}
+		if highRes {
+			args = append([]string{highResFlag}, args...)
+		}
 		status = "installing"
 	}
 	ctx, cancel := context.WithCancel(context.Background())

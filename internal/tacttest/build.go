@@ -60,16 +60,18 @@ func NewBuild(t testing.TB) *Build {
 		{Name: `Utils\readme.txt`, CKey: readC, Size: uint32(len(f.Readme))},
 	})
 	var dl []DownloadFile
-	for i, name := range []string{"mac-art", "shared-art", "windows-art"} {
+	for i, name := range []string{"mac-art", "shared-art", "windows-art", "hires-art"} {
 		_, e := store(bytes.Repeat([]byte(name), 300+i))
 		f.Data[name] = e
 		dl = append(dl, DownloadFile{EKey: e, Size: 1, Priority: int8(i)})
 	}
 	download := Download(1, false, 0, 0, []Tag{
-		{Name: "OSX", Type: tact.TagPlatform, Entries: []int{0, 1}},
-		{Name: "Windows", Type: tact.TagPlatform, Entries: []int{1, 2}},
-		{Name: "enUS", Type: tact.TagLocale, Entries: []int{0, 1, 2}},
-		{Name: "frFR", Type: tact.TagLocale, Entries: []int{0}},
+		{Name: "OSX", Type: tact.TagPlatform, Entries: []int{0, 1, 3}},
+		{Name: "Windows", Type: tact.TagPlatform, Entries: []int{1, 2, 3}},
+		{Name: "enUS", Type: tact.TagLocale, Entries: []int{0, 1, 2, 3}},
+		{Name: "frFR", Type: tact.TagLocale, Entries: []int{0, 3}},
+		// Optional content: only installed when asked for, as Battle.net does.
+		{Name: "HighRes", Type: tact.TagOption, Entries: []int{3}},
 	}, dl)
 	instC, instE := store(install)
 	dlC, dlE := store(download)
