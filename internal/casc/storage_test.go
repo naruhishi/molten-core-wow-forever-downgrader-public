@@ -831,3 +831,175 @@ func TestRepairReclaimsOnlyUnreferencedOwnedArchives(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactRemovesDeadSpace(t *testing.T) {
+	dir := t.TempDir()
+	data := filepath.Join(dir, "data")
+	own := filepath.Join(dir, "own.json")
+	s, err := Open(data, own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs, order := files(40)
+	for _, e := range order {
+		if err := s.Add(e, blobs[e]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	// A run cut off before its index flush: stored bytes no entry names.
+	s.flushEvery = 1 << 40
+	extra, extraOrder := files(60)
+	for _, e := range extraOrder[40:] {
+		if err := s.Add(e, extra[e]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.w.Close()
+	s.w = nil
+	s, err = Open(data, own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stored again over a damaged copy: the old copy is dead space too.
+	for _, e := range order[:10] {
+		if err := s.Add(e, blobs[e]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	size := func() int64 {
+		var total int64
+		list, _ := filepath.Glob(filepath.Join(data, "data.*"))
+		for _, p := range list {
+			fi, _ := os.Stat(p)
+			total += fi.Size()
+		}
+		return total
+	}
+	before := size()
+	if _, err := s.Compact(1<<40, nil); err != nil || size() != before {
+		t.Fatalf("compacted below the threshold: %v", err)
+	}
+	res, err := s.Compact(1, nil)
+	if err != nil || res.Archives == 0 || res.Reclaimed <= 0 || len(res.Broken) != 0 || size() != before-res.Reclaimed {
+		t.Fatalf("compact: %+v, %v (size %d -> %d)", res, err, before, size())
+	}
+	var live int64
+	for _, e := range order {
+		live += int64(headerLen + len(blobs[e]))
+	}
+	list, _ := filepath.Glob(filepath.Join(data, "data.*"))
+	if got := size(); got != live+int64(len(list))*segmentLen {
+		t.Errorf("after compacting: %d bytes on disk in %d archives, %d live", got, len(list), live)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(data, own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if s.Len() != len(order) || len(s.SegmentProblems()) != 0 {
+		t.Fatalf("%d entries, segment problems %v", s.Len(), s.SegmentProblems())
+	}
+	for _, e := range order {
+		if got, err := s.Read(e); err != nil || tact.VerifyBLTE(got, e) != nil {
+			t.Fatalf("%s after compacting: %v", e, err)
+		}
+	}
+}
+
+func TestCompactDropsBrokenFiles(t *testing.T) {
+	dir := t.TempDir()
+	data := filepath.Join(dir, "data")
+	own := filepath.Join(dir, "own.json")
+	s, err := Open(data, own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs, order := files(5)
+	for _, e := range append(order, order[0]) {
+		if err := s.Add(e, blobs[e]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	l, _ := s.Lookup(order[3])
+	s.Close()
+	f, _ := os.OpenFile(filepath.Join(data, fmt.Sprintf("data.%03d", l.Archive)), os.O_RDWR, 0)
+	f.WriteAt([]byte("!"), l.Offset+headerLen+10)
+	f.Close()
+	s, _ = Open(data, own)
+	defer s.Close()
+	res, err := s.Compact(1, nil)
+	if err != nil || len(res.Broken) != 1 || res.Broken[0] != order[3] {
+		t.Fatalf("compact: %+v %v", res, err)
+	}
+	if _, err := os.Stat(filepath.Join(data, fmt.Sprintf("data.%03d", l.Archive))); !os.IsNotExist(err) {
+		t.Fatalf("archive with dead space and a broken file kept: %v", err)
+	}
+	for _, e := range order {
+		_, ok := s.Lookup(e)
+		if ok == (e == order[3]) {
+			t.Fatalf("%s listed = %v", e, ok)
+		}
+		if ok {
+			if got, err := s.Read(e); err != nil || tact.VerifyBLTE(got, e) != nil {
+				t.Fatalf("%s after compacting: %v", e, err)
+			}
+		}
+	}
+}
+
+func TestCompactShortHeadersNeedKnownKeys(t *testing.T) {
+	dir := t.TempDir()
+	data := filepath.Join(dir, "data")
+	own := filepath.Join(dir, "own.json")
+	s, err := Open(data, own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs, order := files(4)
+	for _, e := range append(order, order[0]) {
+		if err := s.Add(e, blobs[e]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Headers as Blizzard's installer writes them: only 9 bytes of the key, behind 7 zeros.
+	var locs []Loc
+	for _, e := range order {
+		l, _ := s.Lookup(e)
+		locs = append(locs, l)
+	}
+	s.Close()
+	for _, l := range locs {
+		f, _ := os.OpenFile(filepath.Join(data, fmt.Sprintf("data.%03d", l.Archive)), os.O_RDWR, 0)
+		f.WriteAt(make([]byte, 7), l.Offset)
+		f.Close()
+	}
+	s, _ = Open(data, own)
+	defer s.Close()
+	if res, err := s.Compact(1, nil); err != nil || len(res.Broken) != 0 {
+		t.Fatalf("without the full keys: %+v %v", res, err)
+	}
+	for _, e := range order {
+		if _, ok := s.Lookup(e); !ok {
+			t.Fatalf("%s lost without its full key", e)
+		}
+	}
+	known := map[tact.Key]bool{}
+	for _, e := range order {
+		known[e] = true
+	}
+	res, err := s.Compact(1, known)
+	if err != nil || len(res.Broken) != 0 || res.Reclaimed <= 0 {
+		t.Fatalf("with the full keys: %+v %v", res, err)
+	}
+	for _, e := range order {
+		if got, err := s.Read(e); err != nil || tact.VerifyBLTE(got, e) != nil {
+			t.Fatalf("%s after compacting: %v", e, err)
+		}
+	}
+}

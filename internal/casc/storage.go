@@ -380,6 +380,15 @@ func (s *Storage) Add(k tact.Key, blob []byte) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.add(k, blob)
+}
+
+// add is Add with s.mu held.
+func (s *Storage) add(k tact.Key, blob []byte) error {
+	size := int64(headerLen + len(blob))
+	if size > s.limit {
+		return fmt.Errorf("%s: %d bytes don't fit an archive", k, len(blob))
+	}
 	if s.w == nil || s.wOff+size > s.limit {
 		if err := s.roll(); err != nil {
 			return err
@@ -576,6 +585,145 @@ func (s *Storage) reclaimUnreferenced() (archives int, reclaimed int64, err erro
 		return archives, reclaimed, e
 	}
 	return archives, reclaimed, nil
+}
+
+// CompactResult says what Compact did.
+type CompactResult struct {
+	Archives  int        // archives rewritten or deleted
+	Reclaimed int64      // bytes freed on disk
+	Broken    []tact.Key // entries dropped because their file is unreadable or fails its key (see Compact)
+}
+
+// Compact rewrites this package's archives that hold at least minWaste bytes no index entry points at: space left
+// by an interrupted run (stored before its last index flush) or by files stored again over a damaged copy. Each live
+// file is checked against its full encoded key and stored again in a new archive; the old archive is then deleted
+// once no entry names it. Archives the game made are never touched.
+//
+// The full key comes from the file's header, or, for a header that keeps only 9 bytes of it (Blizzard's installer
+// writes those), from known. A file whose full key is unknown can't be checked: its archive is left as it is. A file
+// that can't be read, or fails its key, is broken: its entry is dropped and the key returned in Broken, so the caller
+// can fetch it again. It needs free space for the live files of one archive at a time.
+func (s *Storage) Compact(minWaste int64, known map[tact.Key]bool) (CompactResult, error) {
+	var res CompactResult
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.readOnly {
+		return res, errors.New("local storage is open read-only")
+	}
+	if err := s.flush(); err != nil {
+		return res, err
+	}
+	full := make(map[ShortKey]tact.Key, len(known))
+	for k := range known {
+		full[short(k)] = k
+	}
+	type item struct {
+		bucket int
+		key    ShortKey
+		loc    Loc
+	}
+	live := map[int][]item{}
+	used := map[int]int64{}
+	for b, bf := range s.buckets {
+		for k, l := range bf.entries {
+			if !isSegment(b, l) {
+				live[l.Archive] = append(live[l.Archive], item{b, k, l})
+				used[l.Archive] += int64(l.Size)
+			}
+		}
+	}
+	var candidates []int
+	before := s.ownBytes()
+	for _, n := range s.own {
+		fi, e := os.Stat(s.archivePath(n))
+		if e != nil {
+			continue
+		}
+		if fi.Size()-segmentLen-used[n] >= minWaste && used[n] > 0 {
+			candidates = append(candidates, n)
+		}
+	}
+	if len(candidates) == 0 {
+		return res, nil
+	}
+	// The files move to a new archive, never into one being compacted.
+	if s.w != nil {
+		s.readers[s.wNum] = s.w
+		s.w = nil
+	}
+	// drop removes a broken entry. k is its full key when the header had it; the zero key if not.
+	drop := func(it item, k tact.Key) {
+		if known, ok := full[it.key]; ok {
+			k = known
+		} else if short(k) != it.key {
+			k = tact.Key{}
+			copy(k[:], it.key[:])
+		}
+		delete(s.buckets[it.bucket].entries, it.key)
+		s.buckets[it.bucket].dirty = true
+		res.Broken = append(res.Broken, k)
+	}
+	for _, n := range candidates {
+		items := live[n]
+		sort.Slice(items, func(i, j int) bool { return items[i].loc.Offset < items[j].loc.Offset })
+		f, e := s.reader(n)
+		if e != nil {
+			continue
+		}
+		for _, it := range items {
+			if it.loc.Size < headerLen || it.loc.Offset+int64(it.loc.Size) > archiveLimit {
+				drop(it, tact.Key{})
+				continue
+			}
+			buf := make([]byte, it.loc.Size)
+			if _, e := f.ReadAt(buf, it.loc.Offset); e != nil {
+				drop(it, tact.Key{})
+				continue
+			}
+			var k tact.Key
+			for i := range k {
+				k[i] = buf[15-i]
+			}
+			if short(k) != it.key || binary.LittleEndian.Uint32(buf[16:]) != it.loc.Size {
+				drop(it, tact.Key{}) // the entry points at another file
+				continue
+			}
+			if [7]byte(k[9:]) == [7]byte{} { // a header with only 9 bytes of the key
+				known, ok := full[it.key]
+				if !ok {
+					break // can't be checked: left where it is, and the archive stays
+				}
+				k = known
+			}
+			if tact.VerifyBLTE(buf[headerLen:], k) != nil {
+				drop(it, k)
+				continue
+			}
+			if err := s.add(k, buf[headerLen:]); err != nil {
+				return res, err
+			}
+		}
+	}
+	if err := s.flush(); err != nil {
+		return res, err
+	}
+	archives, _, err := s.reclaimUnreferenced()
+	res.Archives = archives
+	if after := s.ownBytes(); after < before {
+		res.Reclaimed = before - after
+	}
+	return res, err
+}
+
+// ownBytes is the size on disk of this package's archives. Callers hold s.mu.
+func (s *Storage) ownBytes() int64 {
+	var total int64
+	for _, n := range s.own {
+		if fi, err := os.Stat(s.archivePath(n)); err == nil {
+			total += fi.Size()
+		}
+	}
+	return total
 }
 
 // Close flushes and closes every file.

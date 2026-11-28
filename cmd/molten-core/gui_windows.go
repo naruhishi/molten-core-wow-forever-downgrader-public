@@ -117,7 +117,14 @@ func launchGUI() bool {
 		if !versionPattern.MatchString(version) {
 			return ""
 		}
-		return filepath.Join(root, "WoW-Forever-"+version[strings.LastIndexByte(version, '.')+1:])
+		// A complete client takes tens of gigabytes: suggest a folder in the
+		// user's profile, never the roaming AppData folder that syncs with
+		// the domain profile.
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		return filepath.Join(home, "WoW-Forever-"+version[strings.LastIndexByte(version, '.')+1:])
 	})
 	w.Bind("pickFolder", func() string { return pickFolder(uintptr(w.Window())) })
 	w.SetSize(690, 580, webview.HintMin)

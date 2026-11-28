@@ -57,11 +57,9 @@ type Options struct {
 	// damaged ones still are.
 	PartialData bool
 
-	NoData         bool  // stop after the loose files (skip the download manifest)
-	KeepLocaleData bool  // install localized data even if it has lower download priority
-	ReuseDeferred  bool  // reuse lower-priority target data locally, without fetching it
-	MaxPriority    *int  // only download manifest entries at or below this priority
-	DataLimit      int64 // stop the data stage after about this many bytes (0: no limit); for trial runs
+	NoData      bool  // stop after the loose files (skip the download manifest)
+	MaxPriority *int  // only download manifest entries at or below this priority
+	DataLimit   int64 // stop the data stage after about this many bytes (0: no limit); for trial runs
 
 	// GameHosts are the CDN hosts written into .build.info, which the game streams missing files from (default: the
 	// CDN client's hosts). A mirror used only for the install is left out this way.
@@ -202,6 +200,13 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 	stop := r.progress()
 	defer stop()
 	rep, err := r.do(ctx)
+	if !opts.Verify && (err != nil || rep == nil || rep.Failed()) {
+		// Remember the client files this attempt wrote, so the install that completes it removes those the build
+		// doesn't list (an attempt with another language, say).
+		if e := r.savePartial(); e != nil && err == nil {
+			err = e
+		}
+	}
 	if r.st != nil {
 		if e := r.st.Close(); e != nil && err == nil {
 			return nil, fmt.Errorf("local storage: %w", e)
@@ -400,11 +405,7 @@ func (r *run) do(ctx context.Context) (*Report, error) {
 	}
 	r.foreign()
 	if !opts.NoData {
-		var localeData map[tact.Key]bool
-		if opts.KeepLocaleData && opts.MaxPriority != nil {
-			localeData = dl.LocaleData(r.Tags)
-		}
-		if err := r.dataFiles(ctx, idx, selected, system, localeData); err != nil {
+		if err := r.dataFiles(ctx, idx, selected, system); err != nil {
 			return nil, err
 		}
 	}
@@ -432,7 +433,21 @@ func (r *run) do(ctx context.Context) (*Report, error) {
 		} else {
 			r.rep.Reclaimed += reclaimed
 		}
+		// Space an interrupted run or a repaired file left in the launcher's archives. The install is already
+		// complete here, so a failure (such as a full disk) only leaves the space unclaimed.
+		if err := r.compact(); err != nil {
+			return nil, err
+		}
+		if r.rep.Failed() {
+			// A file this build needs turned out broken and was dropped: the install isn't complete, and the next
+			// run fetches it again.
+			opts.Log("damaged files were removed; run the install again to download them")
+			return &r.rep, nil
+		}
 		if err := r.writeState(); err != nil {
+			return nil, err
+		}
+		if err := os.Remove(r.partialPath()); err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
 		// The game leaves this when it finds its storage damaged and won't start while it's there. The storage has
@@ -446,18 +461,118 @@ func (r *run) do(ctx context.Context) (*Report, error) {
 	return &r.rep, nil
 }
 
-// prune removes what an earlier install of a different build left behind: client files the new build no longer
-// lists, and (on a full data install) its stored data. It needs a previous install to compare against, and runs
-// after the new build is fully in place, so nothing is removed until the update has succeeded.
-func (r *run) prune() error {
-	if r.prev == nil {
+// partialPath records the client files written by attempts that didn't finish (see savePartial).
+func (r *run) partialPath() string { return filepath.Join(r.Dir, ".everlake", "partial-files.json") }
+
+func (r *run) readPartial() ([]FileFP, error) {
+	data, err := os.ReadFile(r.partialPath())
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	if err := json.Unmarshal(data, &paths); err != nil {
+		return nil, fmt.Errorf("%s: %w", r.partialPath(), err)
+	}
+	files := make([]FileFP, 0, len(paths))
+	for _, p := range paths {
+		if !filepath.IsLocal(filepath.FromSlash(p)) {
+			return nil, fmt.Errorf("%s: unexpected path %q", r.partialPath(), p)
+		}
+		files = append(files, FileFP{Path: p})
+	}
+	return files, nil
+}
+
+// savePartial adds the client files this run wrote to the ones earlier unfinished attempts wrote. Only files the
+// installer itself wrote are listed, never the player's own.
+func (r *run) savePartial() error {
+	old, err := r.readPartial()
+	if err != nil {
+		return err
+	}
+	set := map[string]bool{}
+	for _, f := range old {
+		set[f.Path] = true
+	}
+	r.mu.Lock()
+	for p := range r.clientFiles {
+		set[p] = true
+	}
+	r.mu.Unlock()
+	if len(set) == 0 {
 		return nil
 	}
+	paths := make([]string, 0, len(set))
+	for p := range set {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	data, err := json.Marshal(paths)
+	if err != nil {
+		return err
+	}
+	return writeFile(r.partialPath(), append(data, '\n'), 0o644)
+}
+
+// compactWaste is the unused space an archive must hold before an install rewrites it (see casc.Storage.Compact).
+var compactWaste int64 = 1 << 20
+
+// compact reclaims the space an interrupted run or a repaired file left in the launcher's archives, and drops stored
+// files that turn out broken. A broken file the build needs is reported (the install then isn't complete); any other
+// is simply gone. A failure to rewrite (such as a full disk) only leaves the space unclaimed. On a successful install
+// that isn't an in-place update, the copies of damaged key tables kept in .everlake/bad-index go as well: the
+// tables were rebuilt and the folder should hold only the working client.
+func (r *run) compact() error {
+	keep := make(map[tact.Key]bool, len(r.dataKeep))
+	for _, k := range r.dataKeep {
+		keep[k] = true
+	}
+	res, err := r.st.Compact(compactWaste, keep)
+	if err != nil {
+		r.Log("compacting local storage stopped: %v", err)
+	}
+	for _, k := range res.Broken {
+		if keep[k] {
+			r.problem(r.storedName(k), true)
+		}
+	}
+	if len(res.Broken) > 0 {
+		r.Log("removed %d damaged stored files", len(res.Broken))
+	}
+	if res.Archives > 0 {
+		r.rep.Reclaimed += res.Reclaimed
+		r.Log("compacted %d archives, %.1f MB of unused space reclaimed", res.Archives, float64(res.Reclaimed)/(1<<20))
+	}
+	if !r.Adopt && !r.rep.Failed() {
+		if err := os.RemoveAll(filepath.Join(r.Dir, ".everlake", "bad-index")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// prune removes what the build doesn't need: client files an earlier install of a different build recorded and this
+// one no longer lists, and (on a full data install) any stored data of the launcher's that the build doesn't want,
+// whether an earlier build's or a stray from an interrupted or limited run. It runs after the build is fully in
+// place, so nothing is removed until the install has succeeded.
+func (r *run) prune() error {
+	var prevFiles []FileFP
+	if r.prev != nil {
+		prevFiles = r.prev.Files
+	}
+	partial, err := r.readPartial()
+	if err != nil {
+		return err
+	}
+	prevFiles = append(prevFiles, partial...)
 	// Client files (loose files, configs, indexes, .build.info, .flavor.info): whatever the previous install
 	// recorded and this one isn't responsible for is from the old build. Only the installer-written files are
 	// recorded (fingerprintOwned), so the game's own WTF, logs, screenshots and the player's add-ons — which live in
 	// the same game folder — are never in this list and never removed.
-	for _, f := range r.prev.Files {
+	for _, f := range prevFiles {
 		if r.clientFiles[f.Path] {
 			continue
 		}
@@ -889,7 +1004,7 @@ type span struct {
 }
 
 // dataFiles stores or checks selected download entries and the build's own files.
-func (r *run) dataFiles(ctx context.Context, idx []namedIndex, entries []tact.DownloadEntry, system map[string][2]tact.Key, localeData map[tact.Key]bool) error {
+func (r *run) dataFiles(ctx context.Context, idx []namedIndex, entries []tact.DownloadEntry, system map[string][2]tact.Key) error {
 	var order []tact.Key
 	want := map[tact.Key]*where{}
 	manifestSize := map[tact.Key]int64{}
@@ -905,27 +1020,9 @@ func (r *run) dataFiles(ctx context.Context, idx []namedIndex, entries []tact.Do
 		isSystem[k[1]] = true
 	}
 	nsys := len(order)
-	deferred, localeRequired := 0, 0
-	localOnly := map[tact.Key]bool{}
 	for _, e := range entries {
-		lowerPriority := r.MaxPriority != nil && e.Priority > *r.MaxPriority
-		if lowerPriority && localeData[e.EKey] {
-			localeRequired++
-		}
-		if lowerPriority && !localeData[e.EKey] {
-			deferred++
-			if !r.ReuseDeferred || r.Verify || r.reuse == nil {
-				continue
-			}
-			if _, ok := r.reuse.Lookup(e.EKey); !ok {
-				continue
-			}
-			if _, required := want[e.EKey]; !required {
-				localOnly[e.EKey] = true
-			}
-		} else {
-			// A required entry takes precedence if a key appears more than once.
-			localOnly[e.EKey] = false
+		if r.MaxPriority != nil && e.Priority > *r.MaxPriority {
+			continue
 		}
 		add(e.EKey)
 		manifestSize[e.EKey] = int64(e.Size)
@@ -940,24 +1037,9 @@ func (r *run) dataFiles(ctx context.Context, idx []namedIndex, entries []tact.Do
 
 	// Keep what's already stored and intact.
 	var need []tact.Key
-	var reusedDeferred int
 	var mu sync.Mutex
 	err := r.parallel(ctx, len(order), func(ctx context.Context, i int) error {
 		e := order[i]
-		if localOnly[e] {
-			data, err := r.readReuse(e)
-			if err == nil {
-				if err := r.st.Add(e, data); err != nil {
-					return err
-				}
-				mu.Lock()
-				reusedDeferred++
-				mu.Unlock()
-				r.countData(&r.rep.DataKept)
-				return nil
-			}
-			return nil
-		}
 		data, err := r.st.Read(e)
 		if err == nil && tact.VerifyBLTE(data, e) == nil {
 			if !r.Verify {
@@ -997,12 +1079,6 @@ func (r *run) dataFiles(ctx context.Context, idx []namedIndex, entries []tact.Do
 	if err != nil || r.Verify {
 		return err
 	}
-	if r.KeepLocaleData {
-		r.Log("Archivos de idioma incluidos fuera de la prioridad inicial / Language entries included above startup priority: %d", localeRequired)
-	}
-	if r.MaxPriority != nil {
-		r.Log("Prioridad de inicio / Startup priority: %d; reutilizadas / reused: %d; diferidas / deferred: %d", *r.MaxPriority, reusedDeferred, deferred-reusedDeferred)
-	}
 	var required uint64
 	for _, key := range need {
 		size := manifestSize[key]
@@ -1018,7 +1094,7 @@ func (r *run) dataFiles(ctx context.Context, idx []namedIndex, entries []tact.Do
 		return err
 	}
 	if required > available {
-		return fmt.Errorf("client data needs at least %d additional bytes; %d available; choose streaming or a larger drive", required, available)
+		return fmt.Errorf("client data needs at least %d additional bytes; %d available; free up space or choose a larger drive", required, available)
 	}
 	// Manifest order is priority order: keep it when a limit cuts the list short.
 	pos := make(map[tact.Key]int, len(order))

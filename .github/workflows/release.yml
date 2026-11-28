@@ -1,0 +1,111 @@
+name: Release
+
+# A vX.Y.Z tag builds Molten Core for Windows x64 and Linux x64 and publishes them as that tag's GitHub release:
+# Molten-Core-WoW-Forever-Downgrader.exe, Molten-Core-Windows-x64.zip, Molten-Core-vX.Y.Z-Linux-x64.flatpak and
+# SHA256SUMS.txt. In the private repository the release is a prerelease, for testing: the private updater only offers
+# full releases. In the -public repository it is a full release on the public update channel.
+# The notes come from .github/release-notes/vX.Y.Z.md when that file exists.
+# Run it by hand (workflow_dispatch) with the version to release the chosen branch's commit: the release then creates
+# the tag on that commit.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (vX.Y.Z)'
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  VERSION: ${{ inputs.version || github.ref_name }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check the version
+        shell: bash
+        run: '[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must look like v1.2.3"; exit 1; }'
+      - name: Test installer engine
+        run: go test ./internal/pin ./internal/cdn ./internal/casc ./internal/install ./internal/winres ./cmd/molten-core
+      - name: Build and package
+        shell: pwsh
+        run: |
+          $channel = if ($env:GITHUB_REPOSITORY.EndsWith('-public')) { 'public' } else { 'private' }
+          ./build-windows.ps1 -Version $env:VERSION -Channel $channel
+          Copy-Item LICENSE,LEEME-README.txt dist
+          $exe = 'Molten-Core-WoW-Forever-Downgrader.exe'
+          $probe = Start-Process -FilePath "dist/$exe" -ArgumentList '--app-version' -RedirectStandardOutput app-version.txt -PassThru -Wait
+          if ($probe.ExitCode -ne 0 -or (Get-Content app-version.txt -Raw).Trim() -ne $env:VERSION) {
+            throw "The executable did not report $env:VERSION"
+          }
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item "dist/$exe" out
+          Compress-Archive -Path dist/* -DestinationPath out/Molten-Core-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test installer engine
+        run: go test ./internal/pin ./internal/cdn ./internal/casc ./internal/install ./cmd/molten-core
+      - name: Build and package
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q flatpak
+          CGO_ENABLED=1 go build -trimpath -ldflags "-X main.appVersion=$VERSION" -o molten-core ./cmd/molten-core
+          test "$(./molten-core --app-version)" = "$VERSION"
+          mkdir out
+          bash packaging/flatpak/package.sh ./molten-core "out/Molten-Core-$VERSION-Linux-x64.flatpak"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: out/*
+
+  publish:
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd out
+          sha256sum -- *.exe *.zip *.flatpak > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          cd ..
+          args=(--title "Molten Core $VERSION")
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            args+=(--target "$GITHUB_SHA")
+          else
+            args+=(--verify-tag)
+          fi
+          notes=".github/release-notes/$VERSION.md"
+          if [ -f "$notes" ]; then args+=(--notes-file "$notes"); else args+=(--generate-notes); fi
+          case "$GITHUB_REPOSITORY" in
+            *-public) ;;
+            *) args+=(--prerelease) ;;
+          esac
+          gh release create "$VERSION" "${args[@]}" out/*

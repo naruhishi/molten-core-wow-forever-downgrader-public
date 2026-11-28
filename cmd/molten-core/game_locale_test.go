@@ -26,3 +26,19 @@ func TestConfigureGameLocalePreservesSettings(t *testing.T) {
 		t.Fatalf("Config.wtf = %q, want %q (%v)", got, want, err)
 	}
 }
+
+func TestCompareVersions(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want int
+	}{
+		{"1.60.1.71037", "1.60.1.71037", 0},
+		{"1.60.1.70959", "1.60.1.71037", -1},
+		{"1.61.0.100", "1.60.9.99999", 1},
+		{"1.9.0.1", "1.10.0.1", -1},
+	} {
+		if got := compareVersions(c.a, c.b); got != c.want {
+			t.Errorf("compareVersions(%s, %s) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}

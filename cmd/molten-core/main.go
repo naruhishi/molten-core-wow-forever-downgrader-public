@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/buildthehomelab/wow-everlake-launcher/internal/cdn"
@@ -17,7 +18,7 @@ import (
 	"github.com/buildthehomelab/wow-everlake-launcher/internal/pin"
 )
 
-var appVersion = "v1.9.2"
+var appVersion = "v1.9.3"
 
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--app-version" {
@@ -75,7 +76,7 @@ func run(ctx context.Context, input *bufio.Reader, args []string, locale string,
 	if len(args) == 0 {
 		fmt.Println("Molten Core - WoW Forever Downgrader")
 		fmt.Println("Cierra WoW y Battle.net antes de continuar.")
-		for _, prompt := range []string{"Carpeta de World of Warcraft: ", "Carpeta separada para la 71037: "} {
+		for _, prompt := range []string{"Carpeta de World of Warcraft: ", "Carpeta separada para la " + version + ": "} {
 			fmt.Print(prompt)
 			line, err := input.ReadString('\n')
 			if err != nil {
@@ -95,13 +96,13 @@ func run(ctx context.Context, input *bufio.Reader, args []string, locale string,
 	if err != nil {
 		return fmt.Errorf("leer version de origen: %w", err)
 	}
-	found := false
+	sourceVersion := ""
 	for _, row := range rows {
 		if row.Product == "wowf" && versionPattern.MatchString(row.Version) {
-			found = true
+			sourceVersion = row.Version
 		}
 	}
-	if !found {
+	if sourceVersion == "" {
 		return errors.New("el origen no tiene una instalacion activa de WoW Forever / no active WoW Forever installation")
 	}
 	destination, err := filepath.Abs(args[1])
@@ -160,22 +161,26 @@ func run(ctx context.Context, input *bufio.Reader, args []string, locale string,
 	if err != nil {
 		return err
 	}
+	// The source is the up-to-date Battle.net installation; it is only read.
+	logf("Origen / Source (Battle.net): %s -> destino / target: %s", sourceVersion, target.Version)
+	if compareVersions(target.Version, sourceVersion) >= 0 {
+		logf("Aviso / Warning: %s no es anterior a la version de Battle.net / is not older than the Battle.net version", target.Version)
+	}
 	hosts := target.Hosts(ctx, nil)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// The game can stream lower-priority assets from the CDN listed in .build.info.
-	startupPriority := 0
+	// A complete client: every data file the download manifest lists for this
+	// platform and language, not only the startup set the game would otherwise
+	// stream later. Matching files are copied from the source installation and
+	// only the rest is fetched, in exact byte ranges.
 	report, err := install.Run(ctx, install.Options{
 		Dir: destination, ReuseFrom: source, Pin: target,
 		CDN: cdn.New(append([]string{manifestHost}, hosts...), target.CDNPath), GameHosts: hosts,
-		Tags:           clientTags(locale),
-		ExactRanges:    true,
-		MaxPriority:    &startupPriority,
-		ReuseDeferred:  true,
-		KeepLocaleData: true,
-		Log:            logf,
-		DataProgress:   dataProgress,
+		Tags:         clientTags(locale),
+		ExactRanges:  true,
+		Log:          logf,
+		DataProgress: dataProgress,
 	})
 	if err != nil {
 		return err
@@ -208,4 +213,21 @@ func clientTags(locale string) []string {
 		}
 	}
 	return []string{platform, arch, locale, "US"}
+}
+
+// compareVersions orders two four-part versions (such as 1.60.1.71037)
+// numerically: -1, 0 or 1.
+func compareVersions(a, b string) int {
+	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(pa) && i < len(pb); i++ {
+		x, _ := strconv.Atoi(pa[i])
+		y, _ := strconv.Atoi(pb[i])
+		if x != y {
+			if x < y {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
 }

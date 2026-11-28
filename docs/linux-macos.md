@@ -6,9 +6,8 @@ El paquete contiene un ejecutable con la interfaz y el motor. Abre una ventana
 propia mediante GTK 3 y WebKitGTK 4.1 o 4.0. Requiere esas bibliotecas y una
 sesión gráfica. En Bazzite y Fedora, el paquete de WebKitGTK 4.1 se llama
 `webkit2gtk4.1`. Si falta alguna dependencia, ejecuta desde la terminal para
-ver el diagnóstico. **Examinar** abre el selector nativo de GTK. También
-puedes pegar las rutas. Consulta la [guía del Flatpak](../packaging/flatpak/README.md)
-para instalar el paquete con sus dependencias.
+ver el diagnóstico. **Examinar** abre el selector de carpetas nativo de GTK.
+También puedes pegar las rutas.
 
 ## macOS
 

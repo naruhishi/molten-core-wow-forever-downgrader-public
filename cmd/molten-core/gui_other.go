@@ -106,9 +106,8 @@ func launchGUI() bool {
 				}
 				result = folder
 			case "close":
+				lifetime.resume()
 				defer stop()
-				var lifetime tabLifetime
-				defer lifetime.resume()
 			default:
 				http.NotFound(w, r)
 				return

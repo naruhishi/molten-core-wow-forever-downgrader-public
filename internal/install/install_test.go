@@ -238,44 +238,26 @@ func TestInstallLooseOnlyAndLimits(t *testing.T) {
 	}
 }
 
-func TestStartupIncludesLocaleDataAbovePriority(t *testing.T) {
-	f := newFakeBuild(t)
-	dir := t.TempDir()
-	priority := 0
-	rep, err := f.run(t, dir, func(o *Options) {
-		o.MaxPriority = &priority
-		o.KeepLocaleData = true
-		o.ExactRanges = true
-	})
-	// The fixture tags shared-art for English but not French; its priority is 1.
-	if err != nil || rep.Failed() || !stored(t, dir, f.Data["shared-art"]) ||
-		stored(t, dir, f.Data["windows-art"]) {
-		t.Fatalf("localized startup: %+v %v", rep, err)
-	}
-}
-
-func TestStartupReusesDeferredDataWithoutDownloadingIt(t *testing.T) {
+func TestCompleteInstallReusesSourceAndFetchesTheRest(t *testing.T) {
 	f := newFakeBuild(t)
 	source := t.TempDir()
 	if rep, err := f.run(t, source, nil); err != nil || rep.Failed() {
 		t.Fatalf("source install: %+v %v", rep, err)
 	}
+	// A reduced install that left lower-priority data out is completed on the next run.
+	dest := t.TempDir()
+	zero := 0
+	if rep, err := f.run(t, dest, func(o *Options) { o.MaxPriority = &zero }); err != nil || rep.Failed() {
+		t.Fatalf("reduced install: %+v %v", rep, err)
+	}
 	key := f.Data["shared-art"]
-	priority := 0
-	for _, damaged := range []bool{false, true} {
-		if damaged {
-			damageStored(t, source, key)
-		}
-		dest := t.TempDir()
-		rep, err := f.run(t, dest, func(o *Options) {
-			o.ReuseFrom = source
-			o.MaxPriority = &priority
-			o.ReuseDeferred = true
-			o.ExactRanges = true
-		})
-		if err != nil || rep.Failed() || rep.DataFetched != 0 || stored(t, dest, key) == damaged {
-			t.Fatalf("deferred data (damaged=%v): %+v %v", damaged, rep, err)
-		}
+	damageStored(t, source, key)
+	rep, err := f.run(t, dest, func(o *Options) { o.ReuseFrom = source; o.ExactRanges = true })
+	if err != nil || rep.Failed() || !stored(t, dest, key) || rep.DataFetched != 1 {
+		t.Fatalf("complete install: %+v %v", rep, err)
+	}
+	if s, err := ReadState(dest); err != nil || s.MaxPriority != nil {
+		t.Fatalf("state after complete install: %+v %v", s, err)
 	}
 }
 
@@ -770,5 +752,95 @@ func TestUpdateKeepsPlayerFiles(t *testing.T) {
 			}
 		}
 		makePlayerFiles() // the player keeps playing between updates
+	}
+}
+
+func TestRepairCompactsDeadSpace(t *testing.T) {
+	old := compactWaste
+	compactWaste = 1
+	defer func() { compactWaste = old }()
+	f := newFakeBuild(t)
+	dir := t.TempDir()
+	if rep, err := f.run(t, dir, nil); err != nil || rep.Failed() {
+		t.Fatalf("install: %+v %v", rep, err)
+	}
+	damageStored(t, dir, f.Data["shared-art"])
+	rep, err := f.run(t, dir, nil)
+	if err != nil || rep.Failed() || rep.DataFetched != 1 || rep.Reclaimed <= 0 {
+		t.Fatalf("repair: %+v %v", rep, err)
+	}
+	if rep, err := f.run(t, dir, func(o *Options) { o.Verify = true }); err != nil || rep.Failed() {
+		t.Fatalf("verify after compacting: %+v %v", rep, err)
+	}
+}
+
+func TestCompleteInstallRemovesStrayData(t *testing.T) {
+	f := newFakeBuild(t)
+	dir := t.TempDir()
+	// An attempt for Windows that stops at the data: its loose files are written, its data partly stored.
+	if rep, err := f.run(t, dir, func(o *Options) { o.Tags = []string{"Windows", "enUS"}; o.NoData = true }); err != nil || rep.Failed() {
+		t.Fatalf("loose files: %+v %v", rep, err)
+	}
+	if err := os.Remove(filepath.Join(dir, ".everlake", "install.json")); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ := json.Marshal(f.Pin)
+	if err := os.WriteFile(filepath.Join(dir, ".everlake", "pending.json"), pending, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bad := append([]byte{}, f.ArchBytes...)
+	bad[len(bad)-10] ^= 1
+	f.CDN.Put("data", f.Archive, "", bad)
+	if _, err := f.run(t, dir, func(o *Options) { o.Tags = []string{"Windows", "enUS"} }); err == nil {
+		t.Fatal("attempt with a damaged CDN archive succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "_forever_", "Wow.exe")); err != nil {
+		t.Fatalf("the attempt left no Windows file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".everlake", "bad-index"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The same folder completed for macOS.
+	f.CDN.Put("data", f.Archive, "", f.ArchBytes)
+	rep, err := f.run(t, dir, nil)
+	if err != nil || rep.Failed() {
+		t.Fatalf("complete install: %+v %v", rep, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "_forever_", "Wow.exe")); !os.IsNotExist(err) {
+		t.Fatalf("Wow.exe from the Windows attempt kept: %v", err)
+	}
+	if stored(t, dir, f.Data["windows-art"]) || !stored(t, dir, f.Data["mac-art"]) {
+		t.Fatal("data the build doesn't use was kept, or data it uses was removed")
+	}
+	for _, name := range []string{"bad-index", "partial-files.json", "pending.json"} {
+		if _, err := os.Stat(filepath.Join(dir, ".everlake", name)); !os.IsNotExist(err) {
+			t.Fatalf("%s kept: %v", name, err)
+		}
+	}
+	if rep, err := f.run(t, dir, func(o *Options) { o.Verify = true }); err != nil || rep.Failed() {
+		t.Fatalf("verify: %+v %v", rep, err)
+	}
+}
+
+func TestCompleteInstallRemovesUnrecordedData(t *testing.T) {
+	f := newFakeBuild(t)
+	dir := t.TempDir()
+	if rep, err := f.run(t, dir, func(o *Options) { o.Tags = []string{"Windows", "enUS"} }); err != nil || rep.Failed() {
+		t.Fatalf("first attempt: %+v %v", rep, err)
+	}
+	// As if that attempt had been cut off before recording what it installed.
+	if err := os.Remove(filepath.Join(dir, ".everlake", "install.json")); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ := json.Marshal(f.Pin)
+	if err := os.WriteFile(filepath.Join(dir, ".everlake", "pending.json"), pending, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := f.run(t, dir, nil)
+	if err != nil || rep.Failed() || rep.PrunedData == 0 {
+		t.Fatalf("complete install: %+v %v", rep, err)
+	}
+	if stored(t, dir, f.Data["windows-art"]) || !stored(t, dir, f.Data["mac-art"]) {
+		t.Fatal("data the build doesn't use was kept, or data it uses was removed")
 	}
 }

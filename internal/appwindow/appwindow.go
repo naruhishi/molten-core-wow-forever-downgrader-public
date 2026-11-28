@@ -1,4 +1,6 @@
-// Package appwindow hosts the installer interface in a desktop window.
+// Package appwindow shows a program's local web page in a desktop window of its own: WebView2 on Windows,
+// WKWebView on macOS and WebKitGTK on Linux. The window only frames the page, so the program looks like an app
+// instead of a browser tab.
 //
 // Run must be called on the process's main thread: main locks its goroutine to that thread before anything else.
 // Cocoa refuses to run anywhere else, and WebView2 needs its window and message loop on one thread.
